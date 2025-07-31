@@ -1,6 +1,8 @@
 # Light Stable Semantics Dataset
 
-<img src="figures/example_scene.gif" alt="Example Scene" width="30%">
+<div align="center">
+<img src="figures/example_scene.gif" alt="Example Scene" width="50%">
+</div>
 
 ## Project Goals
 
