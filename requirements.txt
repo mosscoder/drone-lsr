@@ -1,0 +1,9 @@
+numpy
+pillow
+tqdm
+rasterio
+pandas
+torch
+transformers
+datasets
+huggingface_hub

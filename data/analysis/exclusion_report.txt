@@ -1,0 +1,41 @@
+Temporal Anomaly Exclusion Report
+=================================
+
+Total tile sets excluded: 11
+Total files moved: 33
+Total files missing: 0
+
+Excluded Tiles:
+
+9_19:
+  Moved: 3 files
+
+9_20:
+  Moved: 3 files
+
+11_29:
+  Moved: 3 files
+
+12_19:
+  Moved: 3 files
+
+12_20:
+  Moved: 3 files
+
+12_21:
+  Moved: 3 files
+
+14_28:
+  Moved: 3 files
+
+15_27:
+  Moved: 3 files
+
+15_28:
+  Moved: 3 files
+
+16_28:
+  Moved: 3 files
+
+16_29:
+  Moved: 3 files
