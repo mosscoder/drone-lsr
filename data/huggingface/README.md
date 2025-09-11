@@ -1,19 +1,10 @@
 ---
-dataset_info:
-  features:
-    - name: image_t0
-      dtype: image
-    - name: image_t1
-      dtype: image
-    - name: image_t2
-      dtype: image
-    - name: idx
-      dtype: string
-configs:
-  - config_name: default
 license: cc-by-4.0
 task_categories:
 - feature-extraction
+- image-to-image
+language:
+- en
 tags:
 - remote-sensing
 - aerial-imagery
@@ -22,50 +13,91 @@ tags:
 - semantic-stability
 - vision-encoder
 - time-series
-size_categories:
-- 1K<n<10K
-language:
-- en
+- dinov3
+- embeddings
 pretty_name: Light Stable Semantics
+size_categories:
+- n<1K
 ---
 
 # Light Stable Semantics Dataset
 
 ## Dataset Description
 
-This dataset contains aerial orthomosaic tiles captured at three different times of day (10:00, 12:00, and 15:00) to develop vision encoders that are semantically stable under varying lighting conditions. The dataset is designed for training computer vision models that can maintain consistent feature representations despite changes in illumination.
+This dataset contains aerial orthomosaic tiles captured at three different times of day (10:00, 12:00, and 15:00). Each tile includes both the original RGB images and pre-computed DINOv3 embeddings extracted using `facebook/dinov3-vitl16-pretrain-sat493m`. The dataset is designed for adapting vision encoders that can maintain consistent feature representations despite changes in illumination, with applications in remote sensing and environmental monitoring.
 
-### Dataset Summary
+## Dataset Features
 
-- **Purpose**: Training light-stable semantic vision encoders
-- **Data Type**: Aerial orthomosaic tiles (RGBA, 1024x1024 pixels)
-- **Time Points**: 3 captures per location (morning, noon, afternoon)
-- **Coverage**: Lower Partridge area aerial survey
-- **Date**: November 7, 2024 (241107)
-- **Location**: MPG Ranch, Montana, USA
+Each record in the dataset contains the following features:
 
-### Data Structure
+| Feature | Type | Shape | Description |
+|---------|------|--------|-------------|
+| `idx` | string | - | Tile identifier in format `{ROW}_{COL}` for geographic referencing |
+| `image_t0` | Image | 1024×1024×3 | Morning capture at 10:00 AM (time=1000) |
+| `image_t1` | Image | 1024×1024×3 | Noon capture at 12:00 PM (time=1200) |
+| `image_t2` | Image | 1024×1024×3 | Afternoon capture at 3:00 PM (time=1500) |
+| `cls_t0` | float32 | [1024] | DINOv3 CLS token (global features) for morning image |
+| `cls_t1` | float32 | [1024] | DINOv3 CLS token (global features) for noon image |
+| `cls_t2` | float32 | [1024] | DINOv3 CLS token (global features) for afternoon image |
+| `patch_t0` | float32 | [196, 1024] | DINOv3 patch tokens (spatial features) for morning image |
+| `patch_t1` | float32 | [196, 1024] | DINOv3 patch tokens (spatial features) for noon image |
+| `patch_t2` | float32 | [196, 1024] | DINOv3 patch tokens (spatial features) for afternoon image |
 
-Each record contains:
-- `image_t0`: Morning image (10:00, time=1000)
-- `image_t1`: Noon image (12:00, time=1200)  
-- `image_t2`: Afternoon image (15:00, time=1500)
-- `idx`: Tile identifier in format `{ROW}_{COL}`
+## Usage Example
 
-### Data Collection
+```python
+from datasets import load_dataset
 
-The orthomosaics were captured using drone surveys with identical geographic bounds but at different times of day to capture varying lighting conditions. All tiles:
-- Are 1024x1024 pixels of 1.2cm resolution
-- Maintain spatial alignment across time points
-- Use consistent geographic coordinates
+# Load the dataset
+dataset = load_dataset("mpg-ranch/light-stable-semantics")
 
-### Use Cases
+# Access a single record
+sample = dataset['train'][0]
+
+# Images for the three time points
+morning_image = sample['image_t0']
+noon_image = sample['image_t1'] 
+afternoon_image = sample['image_t2']
+
+# Pre-computed DINOv3 embeddings
+morning_cls = sample['cls_t0']     # Global features (1024-dim)
+noon_cls = sample['cls_t1']        # Global features (1024-dim)
+afternoon_cls = sample['cls_t2']   # Global features (1024-dim)
+
+morning_patches = sample['patch_t0']  # Spatial features (196×1024)
+noon_patches = sample['patch_t1']     # Spatial features (196×1024)
+afternoon_patches = sample['patch_t2'] # Spatial features (196×1024)
+
+# Tile location identifier
+tile_id = sample['idx']  # Format: "{ROW}_{COL} of tiles within the original orthomosaic"
+```
+
+## Pre-computed Embeddings
+
+The dataset includes pre-computed embeddings extracted using the **facebook/dinov3-vitl16-pretrain-sat493m** model:
+
+- **CLS Tokens**: 1024-dimensional global feature vectors that capture scene-level semantics
+- **Patch Tokens**: 196×1024 arrays encoding spatial relationships and local features
+- **Purpose**: Enable efficient training and analysis without requiring on-the-fly feature extraction
+- **Model Details**: DINOv3 Vision Transformer Large (16×16 patches) pre-trained on satellite imagery
+
+## Dataset Information
+
+- **Location**: Lower Partridge Alley, MPG Ranch, Montana, USA
+- **Survey Date**: November 7, 2024
+- **Coverage**: ~611 complete tile sets
+- **Resolution**: 1024×1024 pixels at 1.2cm ground resolution
+- **Total Size**: ~6.4GB of image data plus embeddings
+- **Quality Control**: Tiles with transient objects, such as vehicles, were excluded from the dataset.
+
+## Use Cases
 
 This dataset is intended for:
-- Training vision encoders robust to lighting changes
+- Developing vision encoders robust to lighting variations
 - Semantic stability research in computer vision
 - Time-invariant feature learning
 - Remote sensing applications requiring lighting robustness
+- Comparative analysis of illumination effects on vision model features
 
 ## Citation
 
@@ -79,16 +111,21 @@ If you use this dataset in your research, please cite:
   month={November},
   url={https://huggingface.co/datasets/mpg-ranch/light-stable-semantics},
   publisher={Hugging Face},
-  note={Aerial orthomosaic tiles captured at multiple times of day for light-stable semantic vision encoder training},
+  note={Aerial orthomosaic tiles with DINOv3 embeddings for light-stable semantic vision encoder training},
   location={MPG Ranch, Montana, USA},
   survey_date={2024-11-07},
   organization={MPG Ranch}
 }
 ```
 
-## Licensing
+## License
 
-This dataset is released under the [Creative Commons Attribution 4.0 International (CC BY 4.0)](https://creativecommons.org/licenses/by/4.0/) license. 
+This dataset is released under the [Creative Commons Attribution 4.0 International (CC BY 4.0)](https://creativecommons.org/licenses/by/4.0/) license.
 
-Under the following terms:
-- **Attribution** — You must give appropriate credit to MPG Ranch, provide a link to the license, and indicate if changes were made.
+**Attribution Requirements:**
+- You must give appropriate credit to MPG Ranch
+- Provide a link to the license
+- Indicate if changes were made to the dataset
+
+##Updates
+Placeholder
