@@ -25,7 +25,7 @@ The data is available on Hugging Face Hub at [mpg-ranch/light-stable-semantics](
 The dataset creation follows a rigorous 4-step preprocessing pipeline:
 
 1. **00_tile_orthos.py**: Tiles orthomosaics into 1024×1024 pixel tiles with quality control
-2. **01_exclude_temporal_anomalies.py**: Removes tiles with shadows, clouds, or other temporal artifacts
+2. **01_exclude_temporal_anomalies.py**: Removes tiles with transient objects, such as vehicles, that may interfere with the semantic consistency of the dataset.
 3. **02_push_docs_to_hf.py**: Uploads documentation and metadata to Hugging Face Hub
 4. **03_push_imgs_hf.py**: Extracts DINOv3 embeddings and uploads enhanced dataset
 
