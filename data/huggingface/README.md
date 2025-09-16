@@ -85,7 +85,7 @@ The dataset includes pre-computed embeddings extracted using the **facebook/dino
 
 - **Location**: Lower Partridge Alley, MPG Ranch, Montana, USA
 - **Survey Date**: November 7, 2024
-- **Coverage**: ~611 complete tile sets
+- **Coverage**: 609 complete tile sets
 - **Resolution**: 1024×1024 pixels at 1.2cm ground resolution
 - **Total Size**: ~6.4GB of image data plus embeddings
 - **Quality Control**: Tiles with transient objects, such as vehicles, were excluded from the dataset.

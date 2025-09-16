@@ -1,0 +1,38 @@
+{
+  "description": "Point cloud metadata for temporal acquisitions at Lower Partridge, MPG Ranch, Montana",
+  "date": "2024-11-07",
+  "location": "Lower Partridge, MPG Ranch, Montana",
+  "coordinate_system": "NAD83(2011) / Montana (EPSG:6514)",
+  "acquisitions": {
+    "1000": {
+      "time": "10:00",
+      "description": "Morning acquisition",
+      "z_error": 0.025,
+      "resolution": 0.014,
+      "units": {
+        "z_error": "meters",
+        "resolution": "meters"
+      }
+    },
+    "1200": {
+      "time": "12:00",
+      "description": "Noon acquisition",
+      "z_error": 0.017,
+      "resolution": 0.014,
+      "units": {
+        "z_error": "meters",
+        "resolution": "meters"
+      }
+    },
+    "1500": {
+      "time": "15:00",
+      "description": "Afternoon acquisition",
+      "z_error": 0.006,
+      "resolution": 0.014,
+      "units": {
+        "z_error": "meters",
+        "resolution": "meters"
+      }
+    }
+  }
+}
