@@ -2,40 +2,53 @@ Temporal Anomaly Exclusion Report
 =================================
 
 Total tile sets excluded: 11
-Total files moved: 33
-Total files missing: 0
+Total imagery files moved: 33
+Total imagery files missing: 0
+Total canopy files moved: 11
+Total canopy files missing: 0
 
 Excluded Tiles:
 
 9_19:
-  Moved: 3 files
+  Moved imagery: 3 files
+  Moved canopy: 1 files
 
 9_20:
-  Moved: 3 files
+  Moved imagery: 3 files
+  Moved canopy: 1 files
 
 11_29:
-  Moved: 3 files
+  Moved imagery: 3 files
+  Moved canopy: 1 files
 
 12_19:
-  Moved: 3 files
+  Moved imagery: 3 files
+  Moved canopy: 1 files
 
 12_20:
-  Moved: 3 files
+  Moved imagery: 3 files
+  Moved canopy: 1 files
 
 12_21:
-  Moved: 3 files
+  Moved imagery: 3 files
+  Moved canopy: 1 files
 
 14_28:
-  Moved: 3 files
+  Moved imagery: 3 files
+  Moved canopy: 1 files
 
 15_27:
-  Moved: 3 files
+  Moved imagery: 3 files
+  Moved canopy: 1 files
 
 15_28:
-  Moved: 3 files
+  Moved imagery: 3 files
+  Moved canopy: 1 files
 
 16_28:
-  Moved: 3 files
+  Moved imagery: 3 files
+  Moved canopy: 1 files
 
 16_29:
-  Moved: 3 files
+  Moved imagery: 3 files
+  Moved canopy: 1 files

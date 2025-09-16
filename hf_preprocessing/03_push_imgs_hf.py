@@ -6,6 +6,7 @@ from collections import defaultdict
 import pandas as pd
 import torch
 import numpy as np
+import rasterio
 from datasets import Dataset, Features, Image, Value
 from datasets.features import Sequence, Array2D
 from huggingface_hub import HfApi
@@ -16,12 +17,16 @@ from transformers import AutoModel, AutoImageProcessor
 # -------------------------
 hf_org = 'mpg-ranch'
 hf_repo = 'light-stable-semantics'
-TILES_DIR = Path('data/raster/tiles')
+RGB_TILE_DIR = Path('data/raster/tiles/rgb')
+CANOPY_TILE_DIR = Path('data/raster/tiles/chm')
 TARGET_SHARD_SIZE_MB = 500
 TIMES = [1000, 1200, 1500]   # t0, t1, t2
 MODEL_ID = "facebook/dinov3-vitl16-pretrain-sat493m"
 BATCH_SIZE = 16
 WRITER_BATCH_SIZE = 2000
+TILE_SIZE = 1024
+CANOPY_SCALE = 100  # meters to centimeters for integer storage
+CANOPY_FILL_VALUE = np.iinfo(np.int32).min
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -67,7 +72,7 @@ def encode_images(pil_images):
 def scan_tiles():
     logging.info("Scanning tiles directory...")
     tiles_by_location = defaultdict(dict)
-    for tile_path in TILES_DIR.glob('*.png'):
+    for tile_path in RGB_TILE_DIR.glob('*.png'):
         parts = tile_path.stem.split('_')  # {ROW}_{COL}_{TIME}.png
         if len(parts) != 3:
             continue
@@ -87,6 +92,35 @@ def scan_tiles():
             complete_tiles[location_id] = time_dict
     logging.info(f"Found {len(complete_tiles)} complete tile sets")
     return complete_tiles
+
+
+def canopy_tile_path(location_id: str) -> Path:
+    """Return the expected path for a canopy tile."""
+    return CANOPY_TILE_DIR / f"{location_id}.tif"
+
+
+def load_canopy_tile(location_id: str):
+    """Load and quantize the canopy height tile for a location."""
+    path = canopy_tile_path(location_id)
+    if not path.exists():
+        raise FileNotFoundError(f"Missing canopy tile for {location_id} at {path}")
+
+    with rasterio.open(path) as src:
+        tile = src.read(1)
+        if tile.shape != (TILE_SIZE, TILE_SIZE):
+            raise ValueError(f"Unexpected canopy tile shape {tile.shape} for {location_id}")
+        nodata = src.nodata
+
+    tile = tile.astype(np.float32, copy=False)
+    valid = np.isfinite(tile)
+    if nodata is not None and not np.isnan(nodata):
+        valid &= tile != nodata
+
+    canopy_tile = np.full(tile.shape, CANOPY_FILL_VALUE, dtype=np.int32)
+    if np.any(valid):
+        scaled = np.rint(tile[valid] * CANOPY_SCALE).astype(np.int32)
+        canopy_tile[valid] = scaled
+    return canopy_tile
 
 # -------------------------
 # Map fn: add embeddings
@@ -117,15 +151,31 @@ def main():
         logging.error("No complete tile sets found")
         return 1
 
-    # Build records
+    if not CANOPY_TILE_DIR.exists():
+        logging.error("Missing canopy tile directory at %s", CANOPY_TILE_DIR)
+        return 1
+
     records = []
-    for location_id, time_paths in tiles_dict.items():
+    for location_id in sorted(tiles_dict.keys()):
+        time_paths = tiles_dict[location_id]
+        try:
+            canopy_tile = load_canopy_tile(location_id)
+        except (FileNotFoundError, ValueError) as err:
+            logging.error(str(err))
+            return 1
+
         records.append({
             'image_t0': str(time_paths[1000]),
             'image_t1': str(time_paths[1200]),
             'image_t2': str(time_paths[1500]),
-            'idx': location_id
+            'idx': location_id,
+            'canopy_height': canopy_tile.tolist(),
         })
+
+    if not records:
+        logging.error("No tiles available for push")
+        return 1
+
     df = pd.DataFrame(records)
 
     features = Features({
@@ -133,6 +183,7 @@ def main():
         'image_t0': Image(),
         'image_t1': Image(),
         'image_t2': Image(),
+        'canopy_height': Array2D((TILE_SIZE, TILE_SIZE), dtype='int32'),
         'cls_t0': Sequence(Value('float32'), length=DIM),
         'cls_t1': Sequence(Value('float32'), length=DIM),
         'cls_t2': Sequence(Value('float32'), length=DIM),

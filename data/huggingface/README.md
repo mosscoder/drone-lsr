@@ -24,7 +24,7 @@ size_categories:
 
 ## Dataset Description
 
-This dataset contains aerial orthomosaic tiles captured at three different times of day (10:00, 12:00, and 15:00). Each tile includes both the original RGB images and pre-computed DINOv3 embeddings extracted using `facebook/dinov3-vitl16-pretrain-sat493m`. The dataset is designed for adapting vision encoders that can maintain consistent feature representations despite changes in illumination, with applications in remote sensing and environmental monitoring.
+This dataset contains aerial orthomosaic tiles captured at three different times of day (10:00, 12:00, and 15:00). Each tile includes the original RGB images, a co-registered canopy height model (CHM) raster, and pre-computed DINOv3 embeddings extracted using `facebook/dinov3-vitl16-pretrain-sat493m`. The dataset is designed for adapting vision encoders that can maintain consistent feature representations despite changes in illumination, with applications in remote sensing and environmental monitoring.
 
 ## Dataset Features
 
@@ -42,6 +42,9 @@ Each record in the dataset contains the following features:
 | `patch_t0` | float32 | [196, 1024] | DINOv3 patch tokens (spatial features) for morning image |
 | `patch_t1` | float32 | [196, 1024] | DINOv3 patch tokens (spatial features) for noon image |
 | `patch_t2` | float32 | [196, 1024] | DINOv3 patch tokens (spatial features) for afternoon image |
+| `canopy_height` | int32 | [1024, 1024] | Canopy height grid in centimetres derived from the canopy height model |
+
+The canopy height layer is reprojected to align with the RGB tiles and multiplied by 100 before casting to `int32`, so each value represents centimetres above ground. Missing data is encoded with `-2147483648` (the minimum 32-bit integer).
 
 ## Usage Example
 
@@ -70,6 +73,9 @@ afternoon_patches = sample['patch_t2'] # Spatial features (196×1024)
 
 # Tile location identifier
 tile_id = sample['idx']  # Format: "{ROW}_{COL} of tiles within the original orthomosaic"
+
+# Co-registered canopy height (centimetres stored as int32)
+canopy_cm = sample['canopy_height']
 ```
 
 ## Pre-computed Embeddings
@@ -85,10 +91,10 @@ The dataset includes pre-computed embeddings extracted using the **facebook/dino
 
 - **Location**: Lower Partridge Alley, MPG Ranch, Montana, USA
 - **Survey Date**: November 7, 2024
-- **Coverage**: 609 complete tile sets
+- **Coverage**: 620 complete tile sets
 - **Resolution**: 1024×1024 pixels at 1.2cm ground resolution
 - **Total Size**: ~6.4GB of image data plus embeddings
-- **Quality Control**: Tiles with transient objects, such as vehicles, were excluded from the dataset.
+- **Quality Control**: Tiles with transient objects, such as vehicles, were excluded from the dataset. RGB imagery and canopy rasters are removed together to keep modalities aligned.
 
 ## Use Cases
 
