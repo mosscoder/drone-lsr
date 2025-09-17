@@ -27,6 +27,7 @@ WRITER_BATCH_SIZE = 2000
 TILE_SIZE = 1024
 CANOPY_SCALE = 100  # meters to centimeters for integer storage
 CANOPY_FILL_VALUE = np.iinfo(np.int32).min
+TRAIN_TEST_SEED = 42
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -201,13 +202,24 @@ def main():
         writer_batch_size=WRITER_BATCH_SIZE,
     )
 
+    dataset_dict = dataset.train_test_split(
+        test_size=0.2,
+        seed=TRAIN_TEST_SEED,
+        shuffle=True,
+    )
+    logging.info(
+        "Split dataset into %d train and %d test rows",
+        dataset_dict["train"].num_rows,
+        dataset_dict["test"].num_rows,
+    )
+
     old_files = api.list_repo_files(repo_id=repo_id, repo_type="dataset")
     parquet_files = [f for f in old_files if f.endswith('.parquet')]
     for parquet_file in parquet_files:
         api.delete_file(path_in_repo=parquet_file, repo_id=repo_id, repo_type="dataset")
 
     # Push to hub
-    dataset.push_to_hub(repo_id, max_shard_size=f"{TARGET_SHARD_SIZE_MB}MB")
+    dataset_dict.push_to_hub(repo_id, max_shard_size=f"{TARGET_SHARD_SIZE_MB}MB")
     logging.info(f"Uploaded dataset with CLS + patch tokens → {repo_id}")
     return 0
 
