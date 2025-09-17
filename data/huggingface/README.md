@@ -46,6 +46,8 @@ Each record in the dataset contains the following features:
 
 The canopy height layer is reprojected to align with the RGB tiles and multiplied by 100 before casting to `int32`, so each value represents centimetres above ground. Missing data is encoded with `-2147483648` (the minimum 32-bit integer).
 
+The dataset is partitioned with an 80%/20% train/test split.
+
 ## Usage Example
 
 ```python
@@ -54,7 +56,7 @@ from datasets import load_dataset
 # Load the dataset
 dataset = load_dataset("mpg-ranch/light-stable-semantics")
 
-# Access a single record
+# Access a single training record
 sample = dataset['train'][0]
 
 # Images for the three time points
@@ -76,6 +78,9 @@ tile_id = sample['idx']  # Format: "{ROW}_{COL} of tiles within the original ort
 
 # Co-registered canopy height (centimetres stored as int32)
 canopy_cm = sample['canopy_height']
+
+# Held-out evaluation tile
+test_sample = dataset['test'][0]
 ```
 
 ## Pre-computed Embeddings
@@ -91,7 +96,7 @@ The dataset includes pre-computed embeddings extracted using the **facebook/dino
 
 - **Location**: Lower Partridge Alley, MPG Ranch, Montana, USA
 - **Survey Date**: November 7, 2024
-- **Coverage**: 620 complete tile sets
+- **Coverage**: 620 complete tile sets (80% train / 20% test split via seeded random sampling)
 - **Resolution**: 1024×1024 pixels at 1.2cm ground resolution
 - **Total Size**: ~6.4GB of image data plus embeddings
 - **Quality Control**: Tiles with transient objects, such as vehicles, were excluded from the dataset. RGB imagery and canopy rasters are removed together to keep modalities aligned.
@@ -133,5 +138,3 @@ This dataset is released under the [Creative Commons Attribution 4.0 Internation
 - Provide a link to the license
 - Indicate if changes were made to the dataset
 
-##Updates
-Placeholder

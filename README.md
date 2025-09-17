@@ -12,6 +12,8 @@ This project aims to develop vision encoders that maintain semantic stability un
 
 The dataset consists of 1024x1024 pixel tiles extracted from three orthomosaics, with each tile representing the same geographic location captured under different lighting conditions. Each tile now bundles the RGB imagery, a co-registered canopy height model (CHM) raster, and pre-computed DINOv3 embeddings for efficient feature analysis.
 
+Tiles are randomly partitioned into an 80/20 train/test split (seeded at 42) before publishing to the Hugging Face Hub, enabling consistent experimentation and evaluation without additional bookkeeping.
+
 **Dataset Schema:**
 - **Images**: RGB tiles for three time points (10:00, 12:00, 15:00)
 - **Canopy Height**: 1024×1024 integer grid (centimetre units) derived from the canopy height model
@@ -28,7 +30,7 @@ The dataset creation follows a rigorous preprocessing pipeline:
 1. **00_tile_data.py**: Tiles orthomosaics and co-registers the canopy height model into 1024×1024 outputs with quality control
 2. **01_exclude_temporal_anomalies.py**: Removes tiles with transient objects, ensuring both RGB and CHM rasters are excluded together
 3. **02_push_docs_to_hf.py**: Uploads documentation and metadata to Hugging Face Hub
-4. **03_push_imgs_hf.py**: Quantises canopy height to centimetres, extracts DINOv3 embeddings, and uploads the combined dataset
+4. **03_push_imgs_hf.py**: Quantises canopy height to centimetres, extracts DINOv3 embeddings, performs the 80/20 train/test split, and uploads the combined dataset
 
 This pipeline ensures high-quality, semantically consistent tiles suitable for training lighting-robust vision models.
 
