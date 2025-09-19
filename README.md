@@ -12,7 +12,7 @@ This project aims to develop vision encoders that maintain semantic stability un
 
 The dataset consists of 1024x1024 pixel tiles extracted from three orthomosaics, with each tile representing the same geographic location captured under different lighting conditions. Each tile now bundles the RGB imagery, a co-registered canopy height model (CHM) raster, and pre-computed DINOv3 embeddings for efficient feature analysis.
 
-Tiles are randomly partitioned into an 80/20 train/test split (seeded at 42) before publishing to the Hugging Face Hub, enabling consistent experimentation and evaluation without additional bookkeeping.
+Tiles are randomly partitioned into an 80/20 train/test split.
 
 **Dataset Schema:**
 - **Images**: RGB tiles for three time points (10:00, 12:00, 15:00)
