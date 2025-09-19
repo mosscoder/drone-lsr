@@ -3,7 +3,7 @@ pillow
 tqdm
 rasterio
 pandas
-torch
+pytorch
 transformers
 datasets
 huggingface_hub
