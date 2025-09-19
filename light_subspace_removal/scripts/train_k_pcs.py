@@ -269,7 +269,7 @@ def main():
     # Model + optimizer (default Adam)
     model = GenericDenseDecoder(c_in=D, H=H, W=W, H_out=args.out_size, W_out=args.out_size,
                                 base=args.base, dropout=args.dropout).to(device)
-    opt = torch.optim.AdamW(model.parameters())  # defaults: lr=1e-3, betas=(0.9,0.999), wd=0
+    opt = torch.optim.AdamW(model.parameters())
 
     # Train fixed 50 epochs; record best-epoch RMSE
     best_rmse, best_epoch = float('inf'), -1
