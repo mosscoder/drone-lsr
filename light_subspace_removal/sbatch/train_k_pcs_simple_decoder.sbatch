@@ -6,16 +6,13 @@
 #SBATCH --mem=24G
 #SBATCH --time=04:00:00
 #SBATCH --array=0-23%24
-#SBATCH --output=logs/light_subspace_removal/%x_%A_%a.out
-#SBATCH --error=logs/light_subspace_removal/%x_%A_%a.err
+#SBATCH --output=/home/kdoherty/logs/light_subspace_removal/%x_%A_%a.out
+#SBATCH --error=/home/kdoherty/logs/light_subspace_removal/%x_%A_%a.err
 
-# ---- env setup (edit for your cluster) ----
-# module load cuda/12.1
-# mamba activate your_env
+cd /home/kdoherty/light-stable-semantics
 
-cd /home/kdoherty/light_subspace_removal
-
-mkdir -p results/light_subspace_removal
+source ~/.bashrc
+mamba activate light-stable
 
 # Configuration parameters
 TOTAL_CONFIGS=50     # Total number of k/fold combinations
