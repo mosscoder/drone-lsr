@@ -342,7 +342,7 @@ def main():
     ap.add_argument("--total_configs", type=int, default=50)
     # Other arguments
     ap.add_argument("--outdir", type=str, default="results_cv")
-    ap.add_argument("--seed", type=int, default=1337)
+    ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--batch_size", type=int, default=32)
     ap.add_argument("--epochs", type=int, default=50)
     ap.add_argument("--base", type=int, default=256)
@@ -434,18 +434,17 @@ def main():
         val_loader   = DataLoader(val_ds,   batch_size=args.batch_size, shuffle=False, num_workers=0, pin_memory=True)
 
         # Build model(s)
+        val_rmse_history = []
         if args.decoder == "simple":
             model = GenericDenseDecoder(c_in=D, H=H, W=W, H_out=args.out_size, W_out=args.out_size,
                                         base=args.base, dropout=args.dropout).to(device)
-            opt = torch.optim.Adam(model.parameters())  # default Adam
-            best_rmse, best_epoch = float('inf'), -1
+            opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
             for epoch in range(1, args.epochs+1):
                 # pack batch inputs
                 # each xb is [B,D,H,W] already from dataset
                 train_epoch_simple(model, opt, train_loader, device)
                 rm = eval_epoch_simple(model, val_loader, device)
-                if rm < best_rmse:
-                    best_rmse, best_epoch = rm, epoch
+                val_rmse_history.append(rm)
                 print(f"[fold={fold} k={k}] epoch {epoch:03d}  val_RMSE={rm:.3f} cm")
 
         else:  # DPT-style
@@ -460,15 +459,13 @@ def main():
                 max_cm=args.max_cm,
             ).to(device)
             # attach optimizer to decoder (neck is lightweight; share optimizer)
-            opt = torch.optim.Adam(list(neck.parameters()) + list(dpt.parameters()))
+            opt = torch.optim.AdamW(list(neck.parameters()) + list(dpt.parameters()), lr=1e-3)
             dpt.opt = opt  # small convenience for train function
 
-            best_rmse, best_epoch = float('inf'), -1
             for epoch in range(1, args.epochs+1):
                 train_epoch_dpt(neck, dpt, args.out_size, train_loader, device, args.min_cm, args.max_cm)
                 rm = eval_epoch_dpt(neck, dpt, args.out_size, val_loader, device)
-                if rm < best_rmse:
-                    best_rmse, best_epoch = rm, epoch
+                val_rmse_history.append(rm)
                 print(f"[fold={fold} k={k}] epoch {epoch:03d}  val_RMSE={rm:.3f} cm  (DPT)")
 
         # Save metrics JSON
@@ -478,8 +475,7 @@ def main():
             "k": k,
             "seed": args.seed,
             "epochs": args.epochs,
-            "best_epoch": best_epoch,
-            "best_rmse_cm": round(best_rmse, 6),
+            "val_rmse_history": [round(x, 6) for x in val_rmse_history],
             "token_grid": [H, W, D],
             "out_size": args.out_size,
             "bins": args.bins if args.decoder == "dpt" else None,

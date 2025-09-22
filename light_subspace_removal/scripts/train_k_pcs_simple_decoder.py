@@ -227,7 +227,7 @@ def main():
     ap.add_argument("--total_configs", type=int, default=50)
     # Other arguments
     ap.add_argument("--outdir", type=str, default="results/light_subspace_removal")
-    ap.add_argument("--seed", type=int, default=1337)
+    ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--batch_size", type=int, default=32)
     ap.add_argument("--epochs", type=int, default=50)  # fixed per request
     ap.add_argument("--base", type=int, default=256)
@@ -316,15 +316,14 @@ def main():
         # Model + optimizer (default Adam)
         model = GenericDenseDecoder(c_in=D, H=H, W=W, H_out=args.out_size, W_out=args.out_size,
                                     base=args.base, dropout=args.dropout).to(device)
-        opt = torch.optim.AdamW(model.parameters())
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
 
-        # Train fixed 50 epochs; record best-epoch RMSE
-        best_rmse, best_epoch = float('inf'), -1
+        # Train for specified epochs; collect validation RMSE history
+        val_rmse_history = []
         for epoch in range(1, args.epochs+1):
             train_epoch(model, opt, train_loader, device)
             rm = eval_epoch(model, val_loader, device)
-            if rm < best_rmse:
-                best_rmse, best_epoch = rm, epoch
+            val_rmse_history.append(rm)
             print(f"[fold={fold} k={k}] epoch {epoch:03d}  val_RMSE@{args.out_size} = {rm:.3f} cm")
 
         # Save metrics JSON
@@ -334,8 +333,7 @@ def main():
             "k": k,
             "seed": args.seed,
             "epochs": args.epochs,
-            "best_epoch": best_epoch,
-            "best_rmse_cm": round(best_rmse, 6),
+            "val_rmse_history": [round(x, 6) for x in val_rmse_history],
             "token_grid": [H, W, D],
             "out_size": args.out_size,
             "n_train_rows": len(tr_rows),
