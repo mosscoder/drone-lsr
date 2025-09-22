@@ -15,7 +15,7 @@ source ~/.bashrc
 mamba activate light-stable
 
 # Configuration parameters
-TOTAL_CONFIGS=50     # Total number of k/fold combinations
+TOTAL_CONFIGS=55     # Total number of k/fold combinations
 TOTAL_JOBS=24        # Number of parallel jobs
 OUT_SIZE=224         # supervision size; must be a 2^n multiple of inferred token grid
 

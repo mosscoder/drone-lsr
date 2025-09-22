@@ -241,7 +241,7 @@ def main():
     # Determine which k/fold combinations to run
     if args.job_id is not None:
         # Multi-experiment mode: calculate which configs this job handles
-        KS = [0, 1, 2, 3, 5, 6, 7, 8, 16, 32]
+        KS = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512]
         FOLDS = [0, 1, 2, 3, 4]
 
         # Generate all k/fold combinations
