@@ -218,8 +218,14 @@ def eval_epoch(model, loader, device):
 # ---------------------------
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--fold", type=int, required=True, help="fold index in [0..4]")
-    ap.add_argument("--k", type=int, required=True, help="tcSVD rank (0=baseline)")
+    # Legacy single-experiment arguments (for backward compatibility)
+    ap.add_argument("--fold", type=int, default=None, help="fold index in [0..4]")
+    ap.add_argument("--k", type=int, default=None, help="tcSVD rank (0=baseline)")
+    # New multi-experiment arguments
+    ap.add_argument("--job_id", type=int, default=None)
+    ap.add_argument("--total_jobs", type=int, default=24)
+    ap.add_argument("--total_configs", type=int, default=50)
+    # Other arguments
     ap.add_argument("--outdir", type=str, default="results/light_subspace_removal")
     ap.add_argument("--seed", type=int, default=1337)
     ap.add_argument("--batch_size", type=int, default=32)
@@ -232,72 +238,114 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     set_seed(args.seed)
 
+    # Determine which k/fold combinations to run
+    if args.job_id is not None:
+        # Multi-experiment mode: calculate which configs this job handles
+        KS = [0, 1, 2, 3, 5, 6, 7, 8, 16, 32]
+        FOLDS = [0, 1, 2, 3, 4]
+
+        # Generate all k/fold combinations
+        all_configs = [(k, fold) for fold in FOLDS for k in KS]
+        assert len(all_configs) == args.total_configs, f"Expected {args.total_configs} configs, got {len(all_configs)}"
+
+        # Distribute configs across jobs
+        configs_per_job = args.total_configs // args.total_jobs
+        extra_configs = args.total_configs % args.total_jobs
+
+        # Jobs 0 through (extra_configs-1) get one extra config
+        if args.job_id < extra_configs:
+            start_idx = args.job_id * (configs_per_job + 1)
+            end_idx = start_idx + configs_per_job + 1
+        else:
+            start_idx = extra_configs * (configs_per_job + 1) + (args.job_id - extra_configs) * configs_per_job
+            end_idx = start_idx + configs_per_job
+
+        job_configs = all_configs[start_idx:end_idx]
+        print(f"Job {args.job_id} handling {len(job_configs)} configs: {job_configs}")
+    else:
+        # Legacy single-experiment mode
+        if args.fold is None or args.k is None:
+            raise ValueError("Either provide --job_id for multi-experiment mode, or both --fold and --k for single-experiment mode")
+        job_configs = [(args.k, args.fold)]
+
     # Load once to infer grid and build targets at requested size
     X_patch, ids, Y = load_arrays_from_hf(H_out=args.out_size, W_out=args.out_size)  # [M,Np,D], [M,1,O,O]
     H, W, D = infer_token_grid(X_patch)
     print(f"Inferred token grid: H={H}, W={W}, D={D}; supervising at {args.out_size}x{args.out_size}")
 
-    # Group by tile id; build KFold (tile-level)
+    # Group by tile id; build KFold (tile-level) - prepare once
     groups = defaultdict(list)
     for i, tid in enumerate(ids): groups[tid].append(i)
     tiles = sorted(groups.keys())
     kf = KFold(n_splits=5, shuffle=True, random_state=args.seed)
     folds = list(kf.split(tiles))
-    assert 0 <= args.fold < 5, "fold must be 0..4"
 
-    tr_idx, va_idx = folds[args.fold]
-    tr_tiles = [tiles[i] for i in tr_idx]
-    va_tiles = [tiles[i] for i in va_idx]
-    tr_rows  = [j for t in tr_tiles for j in groups[t]]
-    va_rows  = [j for t in va_tiles for j in groups[t]]
+    # Loop over all k/fold combinations assigned to this job
+    for k, fold in job_configs:
+        print(f"\n=== Running k={k}, fold={fold} ===")
 
-    Xtr, Ytr = X_patch[tr_rows], Y[tr_rows]
-    Xva, Yva = X_patch[va_rows], Y[va_rows]
-    id_tr = [ids[j] for j in tr_rows]
+        # Check if result already exists (resume capability)
+        out_path = os.path.join(args.outdir, f"cv_fold{fold}_k{k}.json")
+        if os.path.exists(out_path):
+            print(f"Result already exists at {out_path}, skipping...")
+            continue
 
-    # Fit tcSVD on TRAIN only; project train/val
-    Q = estimate_Q_train_only_patchwise(Xtr, id_tr, T=3, k=args.k)
-    XtrP = apply_projection_np(Xtr, Q)
-    XvaP = apply_projection_np(Xva, Q)
+        assert 0 <= fold < 5, "fold must be 0..4"
 
-    # Datasets / loaders
-    train_ds = DenseSplit(XtrP, Ytr, H, W)
-    val_ds   = DenseSplit(XvaP, Yva, H, W)
-    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, num_workers=0, pin_memory=True)
-    val_loader   = DataLoader(val_ds,   batch_size=args.batch_size, shuffle=False, num_workers=0, pin_memory=True)
+        tr_idx, va_idx = folds[fold]
+        tr_tiles = [tiles[i] for i in tr_idx]
+        va_tiles = [tiles[i] for i in va_idx]
+        tr_rows  = [j for t in tr_tiles for j in groups[t]]
+        va_rows  = [j for t in va_tiles for j in groups[t]]
 
-    # Model + optimizer (default Adam)
-    model = GenericDenseDecoder(c_in=D, H=H, W=W, H_out=args.out_size, W_out=args.out_size,
-                                base=args.base, dropout=args.dropout).to(device)
-    opt = torch.optim.AdamW(model.parameters())
+        Xtr, Ytr = X_patch[tr_rows], Y[tr_rows]
+        Xva, Yva = X_patch[va_rows], Y[va_rows]
+        id_tr = [ids[j] for j in tr_rows]
 
-    # Train fixed 50 epochs; record best-epoch RMSE
-    best_rmse, best_epoch = float('inf'), -1
-    for epoch in range(1, args.epochs+1):
-        train_epoch(model, opt, train_loader, device)
-        rm = eval_epoch(model, val_loader, device)
-        if rm < best_rmse:
-            best_rmse, best_epoch = rm, epoch
-        print(f"[fold={args.fold} k={args.k}] epoch {epoch:03d}  val_RMSE@{args.out_size} = {rm:.3f} cm")
+        # Fit tcSVD on TRAIN only; project train/val
+        Q = estimate_Q_train_only_patchwise(Xtr, id_tr, T=3, k=k)
+        XtrP = apply_projection_np(Xtr, Q)
+        XvaP = apply_projection_np(Xva, Q)
 
-    # Save metrics JSON
-    os.makedirs(args.outdir, exist_ok=True)
-    result = {
-        "fold": args.fold,
-        "k": args.k,
-        "seed": args.seed,
-        "epochs": args.epochs,
-        "best_epoch": best_epoch,
-        "best_rmse_cm": round(best_rmse, 6),
-        "token_grid": [H, W, D],
-        "out_size": args.out_size,
-        "n_train_rows": len(tr_rows),
-        "n_val_rows": len(va_rows),
-    }
-    out_path = os.path.join(args.outdir, f"cv_fold{args.fold}_k{args.k}.json")
-    with open(out_path, "w") as f:
-        json.dump(result, f, indent=2)
-    print(f"Saved {out_path}")
+        # Datasets / loaders
+        train_ds = DenseSplit(XtrP, Ytr, H, W)
+        val_ds   = DenseSplit(XvaP, Yva, H, W)
+        train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, num_workers=0, pin_memory=True)
+        val_loader   = DataLoader(val_ds,   batch_size=args.batch_size, shuffle=False, num_workers=0, pin_memory=True)
+
+        # Model + optimizer (default Adam)
+        model = GenericDenseDecoder(c_in=D, H=H, W=W, H_out=args.out_size, W_out=args.out_size,
+                                    base=args.base, dropout=args.dropout).to(device)
+        opt = torch.optim.AdamW(model.parameters())
+
+        # Train fixed 50 epochs; record best-epoch RMSE
+        best_rmse, best_epoch = float('inf'), -1
+        for epoch in range(1, args.epochs+1):
+            train_epoch(model, opt, train_loader, device)
+            rm = eval_epoch(model, val_loader, device)
+            if rm < best_rmse:
+                best_rmse, best_epoch = rm, epoch
+            print(f"[fold={fold} k={k}] epoch {epoch:03d}  val_RMSE@{args.out_size} = {rm:.3f} cm")
+
+        # Save metrics JSON
+        os.makedirs(args.outdir, exist_ok=True)
+        result = {
+            "fold": fold,
+            "k": k,
+            "seed": args.seed,
+            "epochs": args.epochs,
+            "best_epoch": best_epoch,
+            "best_rmse_cm": round(best_rmse, 6),
+            "token_grid": [H, W, D],
+            "out_size": args.out_size,
+            "n_train_rows": len(tr_rows),
+            "n_val_rows": len(va_rows),
+        }
+        with open(out_path, "w") as f:
+            json.dump(result, f, indent=2)
+        print(f"Saved {out_path}")
+
+    print(f"Completed all {len(job_configs)} configurations for this job.")
 
 if __name__ == "__main__":
     main()

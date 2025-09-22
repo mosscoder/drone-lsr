@@ -5,7 +5,7 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=24G
 #SBATCH --time=04:00:00
-#SBATCH --array=0-49%24
+#SBATCH --array=0-23%24
 #SBATCH --output=logs/light_subspace_removal/%x_%A_%a.out
 #SBATCH --error=logs/light_subspace_removal/%x_%A_%a.err
 
@@ -17,23 +17,20 @@ cd /home/kdoherty/light_subspace_removal
 
 mkdir -p results/light_subspace_removal
 
-# Sweep parameters
-KS=(0 1 2 3 5 6 7 8 16 32)
-FOLDS=(0 1 2 3 4)
+# Configuration parameters
+TOTAL_CONFIGS=50     # Total number of k/fold combinations
+TOTAL_JOBS=24        # Number of parallel jobs
 OUT_SIZE=224         # supervision size; must be a 2^n multiple of inferred token grid
 
-# Map array index -> (fold, k)
-IDX=${SLURM_ARRAY_TASK_ID}
-NUM_K=${#KS[@]}
-FOLD=${FOLDS[$(( IDX / NUM_K ))]}
-K=${KS[$(( IDX % NUM_K ))]}
+echo "Running job ${SLURM_ARRAY_TASK_ID} of ${TOTAL_JOBS} for ${TOTAL_CONFIGS} total configs"
 
-echo "Running fold=${FOLD}  k=${K}  out_size=${OUT_SIZE}"
+export PYTHONUNBUFFERED=1
 
-python -u light_subspace_removal/scripts/train_k_pcs.py \
-  --fold ${FOLD} \
-  --k ${K} \
-  --outdir results/light_subspace_removal \
+python -u light_subspace_removal/scripts/train_k_pcs_dpt.py \
+  --job_id ${SLURM_ARRAY_TASK_ID} \
+  --total_jobs ${TOTAL_JOBS} \
+  --total_configs ${TOTAL_CONFIGS} \
+  --outdir results/light_subspace_removal/dpt \
   --epochs 50 \
   --batch_size 32 \
   --out_size ${OUT_SIZE}
