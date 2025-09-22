@@ -134,6 +134,8 @@ def main():
         # Plot 1: Learning curves for all k values
         fig, ax = plt.subplots(figsize=(12, 8))
 
+        print(f"Plotting learning curves for k values: {sorted(plot_data.keys())}")
+
         for k in sorted(plot_data.keys()):
             data = plot_data[k]
             epochs = np.arange(1, len(data['mean_history']) + 1)
@@ -191,30 +193,12 @@ def main():
         ci_95_upper = np.array(ci_95_upper)
 
         # Plot line with 95% CI ribbon
-        ax.plot(ks, best_rmses, 'o-', color='steelblue', linewidth=2, markersize=6,
-                label='Best CV RMSE')
-        ax.fill_between(ks, ci_95_lower, ci_95_upper, color='steelblue', alpha=0.3,
-                       label='95% Confidence Interval')
+        ax.plot(ks, best_rmses, 'o-', color='steelblue', linewidth=2, markersize=6)
+        ax.fill_between(ks, ci_95_lower, ci_95_upper, color='steelblue', alpha=0.3)
 
         ax.set_xlabel('k (Number of PCs Removed)', fontsize=12)
         ax.set_ylabel('Best CV RMSE (cm)', fontsize=12)
-        ax.set_title('Cross-Validated Performance vs Lighting Subspace Removal', fontsize=14)
         ax.grid(True, alpha=0.3)
-
-        # Mark best k
-        best_k_idx = np.argmin(best_rmses)
-        best_k = ks[best_k_idx]
-        ax.axvline(x=best_k, color='red', linestyle='--', alpha=0.8, linewidth=2,
-                  label=f'Best k = {best_k}')
-
-        # Add point annotation for best k
-        ax.annotate(f'k = {best_k}\nRMSE = {best_rmses[best_k_idx]:.3f}',
-                   xy=(best_k, best_rmses[best_k_idx]),
-                   xytext=(10, 10), textcoords='offset points',
-                   bbox=dict(boxstyle='round,pad=0.3', facecolor='yellow', alpha=0.7),
-                   arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=0'))
-
-        ax.legend(frameon=True, fancybox=True, shadow=True)
 
         plot_path = os.path.join(args.outdir, 'cv_performance_vs_k.png')
         plt.savefig(plot_path, dpi=150, bbox_inches='tight')
