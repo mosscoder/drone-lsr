@@ -7,11 +7,16 @@ Patch-agnostic dense CHM regression from pre-encoded DINOv2/DINOv3 patch tokens.
 - Decoder upsamples from [D, H, W] to [1, H_out, W_out] where H_out/W_out are args (default 224).
 - tcSVD lighting subspace removal with rank k (0 = baseline).
 - Spatio-temporal CV: 5 spatial folds × 3 temporal holdouts = 15 validation metrics.
-- Trains 50 epochs (no early stopping) with AdamW; reports validation RMSE history.
+- Trains 50 epochs (no early stopping) with AdamW; reports TEMPORAL-VAL RMSE history
+  (evaluated on the held-out timepoint for the spatially held-out tiles).
 - Writes JSON: results/{model_config}/simple_decoder/cv_s{spatial}_t{temporal}_k{k}.json
 
 Usage:
+  # Single experiment
   python train_k_pcs_simple_decoder.py --model_config dinov2_base --spatial_fold 0 --temporal_holdout 0 --k 3
+
+  # Distributed grid (k × spatial_fold × temporal_holdout × model_config)
+  python train_k_pcs_simple_decoder.py --job_id 0 --total_jobs 8 --total_configs 330
 """
 
 import argparse, json, os, random
@@ -136,13 +141,13 @@ def load_arrays_from_hf(model_config: str, temporal_holdout: int, H_out: int, W_
 
     # Define temporal splits
     time_keys = ['t0', 't1', 't2']
-    if temporal_holdout == 0:  # Validate on morning
+    if temporal_holdout == 0:  # Validate on t0
         train_keys = ['t1', 't2']
         val_key = 't0'
-    elif temporal_holdout == 1:  # Validate on noon
+    elif temporal_holdout == 1:  # Validate on t1
         train_keys = ['t0', 't2']
         val_key = 't1'
-    else:  # temporal_holdout == 2, validate on afternoon
+    else:  # temporal_holdout == 2, Validate on t2
         train_keys = ['t0', 't1']
         val_key = 't2'
 
@@ -161,7 +166,7 @@ def load_arrays_from_hf(model_config: str, temporal_holdout: int, H_out: int, W_
             ids_train.append(idx)
             Y_train.append(target)
 
-        # Add validation time point
+        # Add validation time point (held-out time)
         tokens = np.array(ex[f'patch_{val_key}'], dtype=np.float32)  # [Np,D]
         Xp_val.append(tokens)
         ids_val.append(idx)
@@ -257,7 +262,7 @@ class GenericDenseDecoder(nn.Module):
         return x
 
 # ---------------------------
-# Train / Eval (50 epochs, best-epoch RMSE)
+# Train / Eval (50 epochs, best-epoch optional)
 # ---------------------------
 def rmse_map(y_true, y_pred):  # y: [B,1,H,W]
     return torch.sqrt(torch.mean((y_true - y_pred)**2))
@@ -282,7 +287,7 @@ def eval_epoch(model, loader, device):
     return float(torch.stack(rmses).mean())
 
 # ---------------------------
-# Main (one (fold,k) job)
+# Main (one (fold,k,time,model) job)
 # ---------------------------
 def main():
     ap = argparse.ArgumentParser()
@@ -359,7 +364,7 @@ def main():
         assert 0 <= spatial_fold < 5, "spatial_fold must be 0..4"
         assert 0 <= temporal_holdout < 3, "temporal_holdout must be 0..2"
 
-        # Load data with spatio-temporal split
+        # Load data with spatio-temporal split (train-times vs held-out time)
         (X_train, ids_train, Y_train), (X_val, ids_val, Y_val) = load_arrays_from_hf(
             model_config, temporal_holdout, args.out_size, args.out_size)
 
@@ -373,34 +378,36 @@ def main():
             train_groups[tid].append(i)
         train_tiles = sorted(train_groups.keys())
 
-        # Group validation data by tile id
+        # Group validation (held-out time) data by tile id
         val_groups = defaultdict(list)
         for i, tid in enumerate(ids_val):
             val_groups[tid].append(i)
 
-        # Apply spatial fold to training data
+        # Apply spatial fold to TRAIN TILES
         kf = KFold(n_splits=5, shuffle=True, random_state=args.seed)
         spatial_folds = list(kf.split(train_tiles))
-
         tr_idx, va_idx = spatial_folds[spatial_fold]
         tr_tiles = [train_tiles[i] for i in tr_idx]
         va_tiles = [train_tiles[i] for i in va_idx]
-        tr_rows = [j for t in tr_tiles for j in train_groups[t]]
-        va_rows = [j for t in va_tiles for j in train_groups[t]]
+
+        # Row indices for train (from train times) and temporal-val (held-out time)
+        tr_rows = [j for t in tr_tiles for j in train_groups.get(t, [])]
+        va_rows_temporal = [j for t in va_tiles for j in val_groups.get(t, [])]
 
         Xtr, Ytr = X_train[tr_rows], Y_train[tr_rows]
-        Xva, Yva = X_train[va_rows], Y_train[va_rows]
+        Xval_time, Yval_time = X_val[va_rows_temporal], Y_val[va_rows_temporal]
         id_tr = [ids_train[j] for j in tr_rows]
 
-        # Fit tcSVD on TRAIN only; project train/val
-        Q = estimate_Q_train_only_patchwise(Xtr, id_tr, T=2, k=k)  # T=2 since we use 2 time points for training
-        XtrP = apply_projection_np(Xtr, Q)
-        XvaP = apply_projection_np(Xva, Q)
+        # Fit tcSVD on TRAIN ONLY (T=2 since we use two training timepoints)
+        Q = estimate_Q_train_only_patchwise(Xtr, id_tr, T=2, k=k)
+        XtrP       = apply_projection_np(Xtr, Q)
+        Xval_timeP = apply_projection_np(Xval_time, Q)
 
-        # Datasets / loaders
+        # Datasets / loaders: VALIDATION IS ON THE HELD-OUT TIME
         train_ds = DenseSplit(XtrP, Ytr, H, W)
-        val_ds   = DenseSplit(XvaP, Yva, H, W)
-        train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, num_workers=0, pin_memory=True)
+        val_ds   = DenseSplit(Xval_timeP, Yval_time, H, W)
+
+        train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True,  num_workers=0, pin_memory=True)
         val_loader   = DataLoader(val_ds,   batch_size=args.batch_size, shuffle=False, num_workers=0, pin_memory=True)
 
         # Model + optimizer (AdamW)
@@ -408,13 +415,13 @@ def main():
                                     base=args.base, dropout=args.dropout).to(device)
         opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
 
-        # Train for specified epochs; collect validation RMSE history
+        # Train for specified epochs; collect TEMPORAL-VAL RMSE history
         val_rmse_history = []
         for epoch in range(1, args.epochs+1):
             train_epoch(model, opt, train_loader, device)
             rm = eval_epoch(model, val_loader, device)
             val_rmse_history.append(rm)
-            print(f"[s{spatial_fold}_t{temporal_holdout}_k{k}] epoch {epoch:03d}  val_RMSE@{args.out_size} = {rm:.3f} cm")
+            print(f"[s{spatial_fold}_t{temporal_holdout}_k{k}] epoch {epoch:03d}  TEMPORAL-VAL RMSE@{args.out_size} = {rm:.3f} cm")
 
         # Save metrics JSON
         result = {
@@ -424,11 +431,13 @@ def main():
             "model_config": model_config,
             "seed": args.seed,
             "epochs": args.epochs,
-            "val_rmse_history": [round(x, 6) for x in val_rmse_history],
+            "val_rmse_history": [round(x, 6) for x in val_rmse_history],  # held-out time on held-out tiles
             "token_grid": [H, W, D],
             "out_size": args.out_size,
             "n_train_rows": len(tr_rows),
-            "n_val_rows": len(va_rows),
+            "n_temporal_val_rows": len(va_rows_temporal),
+            "train_tiles": tr_tiles,
+            "val_tiles": va_tiles,  # spatially held-out tiles for this fold
         }
         with open(out_path, "w") as f:
             json.dump(result, f, indent=2)
