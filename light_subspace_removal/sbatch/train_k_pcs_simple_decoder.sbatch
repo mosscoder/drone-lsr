@@ -9,22 +9,13 @@
 #SBATCH --output=/home/kdoherty/logs/light_subspace_removal/%x_%A_%a.out
 #SBATCH --error=/home/kdoherty/logs/light_subspace_removal/%x_%A_%a.err
 
-set -euo pipefail
-
 cd /home/kdoherty/light-stable-semantics
 
 # Env
 source ~/.bashrc
 mamba activate light-stable
 
-# Threading (helps the SVD step on CPU)
-export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
-export MKL_NUM_THREADS=${SLURM_CPUS_PER_TASK}
-export NUMEXPR_NUM_THREADS=${SLURM_CPUS_PER_TASK}
-export PYTORCH_JIT=0
 export PYTHONUNBUFFERED=1
-# Optional: reduce CUDA OOM fragmentation on long runs
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 # Grid parameters (spatial-only CV with variance targets)
 TOTAL_CONFIGS=60      # 6 var levels × 5 folds × 2 model_configs
