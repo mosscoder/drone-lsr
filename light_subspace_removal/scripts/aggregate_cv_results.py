@@ -1,25 +1,33 @@
 #!/usr/bin/env python3
 """
-Aggregate per-(fold,k) JSON results into CV summaries.
+Aggregate spatio-temporal CV results into side-by-side model comparison plots.
 
-Updated to work with val_rmse_history format where each result contains
-the full validation RMSE history across all epochs.
+Updated to work with new directory structure:
+results/{model_config}/{decoder_type}/cv_s{spatial}_t{temporal}_k{k}.json
+
+Creates side-by-side plots comparing DINOv2 vs DINOv3 models.
 """
 import argparse, json, os, glob
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy import stats
+from pathlib import Path
 
-def load_results(indir):
-    """Load all result files and group by k value."""
-    pattern = os.path.join(indir, "cv_fold*_k*.json")
+def load_results_for_model(base_dir, model_config, decoder_type):
+    """Load all result files for a specific model config and decoder type."""
+    model_dir = os.path.join(base_dir, model_config, decoder_type)
+    if not os.path.exists(model_dir):
+        print(f"Directory not found: {model_dir}")
+        return {}
+
+    pattern = os.path.join(model_dir, "cv_s*_t*_k*.json")
     paths = sorted(glob.glob(pattern))
 
     if not paths:
-        print(f"No result files found in {indir}")
+        print(f"No result files found in {model_dir}")
         return {}
 
-    print(f"Found {len(paths)} result files")
+    print(f"Found {len(paths)} result files for {model_config}/{decoder_type}")
 
     # Load all results
     results = []
@@ -48,171 +56,199 @@ def load_results(indir):
 
 def compute_cv_metrics(fold_results):
     """
-    Compute cross-validated metrics from fold results.
-
-    Returns:
-        best_epoch: 0-indexed epoch with lowest mean CV RMSE
-        best_mean_rmse: mean RMSE across folds at best epoch
-        best_std_rmse: std RMSE across folds at best epoch
-        fold_rmses: RMSE values for each fold at best epoch
-        mean_history: mean RMSE across folds for each epoch
-        std_history: std RMSE across folds for each epoch
+    Compute cross-validation metrics from spatio-temporal fold results.
+    Each fold_results entry contains val_rmse_history across epochs.
     """
-    # Stack histories into matrix [n_folds, n_epochs]
+    if not fold_results:
+        return None, None, None
+
+    # Extract validation RMSE histories
     histories = []
     for result in fold_results:
-        hist = result["val_rmse_history"]
-        histories.append(hist)
+        history = result["val_rmse_history"]
+        if not history:
+            continue
+        histories.append(history)
 
-    hist_matrix = np.array(histories)  # [n_folds, n_epochs]
+    if not histories:
+        return None, None, None
 
-    # Compute mean and std across folds for each epoch
-    mean_history = hist_matrix.mean(axis=0)  # [n_epochs]
-    std_history = hist_matrix.std(axis=0)    # [n_epochs]
+    # Ensure all histories have the same length (should be 50 epochs)
+    min_len = min(len(h) for h in histories)
+    histories = [h[:min_len] for h in histories]
 
-    # Find best CV epoch (lowest mean RMSE)
+    # Convert to numpy array [n_folds, n_epochs]
+    hist_matrix = np.array(histories)
+    n_folds = hist_matrix.shape[0]
+
+    # Take mean across folds for each epoch
+    mean_history = hist_matrix.mean(axis=0)
+
+    # Find best epoch based on mean validation RMSE
     best_epoch = np.argmin(mean_history)
-    best_mean_rmse = mean_history[best_epoch]
-    best_std_rmse = std_history[best_epoch]
-    fold_rmses = hist_matrix[:, best_epoch]  # RMSE for each fold at best epoch
 
-    return best_epoch, best_mean_rmse, best_std_rmse, fold_rmses, mean_history, std_history
+    # Extract RMSE at best epoch for each fold
+    fold_rmses = hist_matrix[:, best_epoch]
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--indir", type=str, required=True, help="Directory containing result files")
-    ap.add_argument("--plot", action="store_true", help="Generate learning curve plots")
-    ap.add_argument("--outdir", type=str, default="plots", help="Output directory for plots")
-    args = ap.parse_args()
+    # Compute statistics
+    mean_rmse = fold_rmses.mean()
+    std_rmse = fold_rmses.std()
 
-    by_k = load_results(args.indir)
+    # 95% confidence interval using t-distribution
+    if n_folds > 1:
+        t_critical = stats.t.ppf(0.975, df=n_folds-1)
+        margin_error = t_critical * std_rmse / np.sqrt(n_folds)
+        ci_lower = mean_rmse - margin_error
+        ci_upper = mean_rmse + margin_error
+    else:
+        ci_lower = ci_upper = mean_rmse
 
-    if not by_k:
+    return mean_rmse, ci_lower, ci_upper
+
+def create_comparison_plot(dinov2_results, dinov3_results, decoder_type, output_path):
+    """Create side-by-side comparison plot for DINOv2 vs DINOv3."""
+
+    # Get all k values that appear in both models
+    dinov2_ks = set(dinov2_results.keys()) if dinov2_results else set()
+    dinov3_ks = set(dinov3_results.keys()) if dinov3_results else set()
+    all_ks = sorted(dinov2_ks | dinov3_ks)
+
+    if not all_ks:
+        print(f"No k values found for {decoder_type}")
         return
 
-    # Print CV summary
-    print(f"\n===== CROSS-VALIDATED RESULTS ({args.indir}) =====")
-    print("k    | Best Epoch | CV RMSE (cm)    | Fold RMSEs")
-    print("-" * 55)
+    # Compute metrics for each k value
+    dinov2_means, dinov2_lowers, dinov2_uppers = [], [], []
+    dinov3_means, dinov3_lowers, dinov3_uppers = [], [], []
 
-    plot_data = {}  # For optional plotting
+    for k in all_ks:
+        # DINOv2 metrics
+        if k in dinov2_results:
+            mean, lower, upper = compute_cv_metrics(dinov2_results[k])
+            dinov2_means.append(mean if mean is not None else np.nan)
+            dinov2_lowers.append(lower if lower is not None else np.nan)
+            dinov2_uppers.append(upper if upper is not None else np.nan)
+        else:
+            dinov2_means.append(np.nan)
+            dinov2_lowers.append(np.nan)
+            dinov2_uppers.append(np.nan)
 
-    for k in sorted(by_k.keys()):
-        fold_results = by_k[k]
-        n_folds = len(fold_results)
+        # DINOv3 metrics
+        if k in dinov3_results:
+            mean, lower, upper = compute_cv_metrics(dinov3_results[k])
+            dinov3_means.append(mean if mean is not None else np.nan)
+            dinov3_lowers.append(lower if lower is not None else np.nan)
+            dinov3_uppers.append(upper if upper is not None else np.nan)
+        else:
+            dinov3_means.append(np.nan)
+            dinov3_lowers.append(np.nan)
+            dinov3_uppers.append(np.nan)
 
-        if n_folds < 5:
-            print(f"k={k:>2}: Only {n_folds}/5 folds present")
+    # Convert to numpy arrays
+    k_values = np.array(all_ks)
+    dinov2_means = np.array(dinov2_means)
+    dinov2_lowers = np.array(dinov2_lowers)
+    dinov2_uppers = np.array(dinov2_uppers)
+    dinov3_means = np.array(dinov3_means)
+    dinov3_lowers = np.array(dinov3_lowers)
+    dinov3_uppers = np.array(dinov3_uppers)
+
+    # Create side-by-side plots
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+
+    # Left panel: DINOv2 Base
+    valid_dinov2 = ~np.isnan(dinov2_means)
+    if np.any(valid_dinov2):
+        ax1.plot(k_values[valid_dinov2], dinov2_means[valid_dinov2], 'b-', linewidth=2)
+        ax1.fill_between(k_values[valid_dinov2],
+                        dinov2_lowers[valid_dinov2],
+                        dinov2_uppers[valid_dinov2],
+                        alpha=0.3, color='blue')
+    ax1.set_title('DINOv2 Base (ViT-B/14)', fontsize=14)
+    ax1.set_xlabel('Number of PCs Removed (k)')
+    ax1.set_ylabel('RMSE (cm)')
+    ax1.set_xscale('log')
+    ax1.grid(True, alpha=0.3)
+    ax1.set_xlim(0.8, max(all_ks) * 1.2)
+
+    # Right panel: DINOv3 SAT
+    valid_dinov3 = ~np.isnan(dinov3_means)
+    if np.any(valid_dinov3):
+        ax2.plot(k_values[valid_dinov3], dinov3_means[valid_dinov3], 'r-', linewidth=2)
+        ax2.fill_between(k_values[valid_dinov3],
+                        dinov3_lowers[valid_dinov3],
+                        dinov3_uppers[valid_dinov3],
+                        alpha=0.3, color='red')
+    ax2.set_title('DINOv3 Large + SAT (ViT-L/16)', fontsize=14)
+    ax2.set_xlabel('Number of PCs Removed (k)')
+    ax2.set_ylabel('RMSE (cm)')
+    ax2.set_xscale('log')
+    ax2.grid(True, alpha=0.3)
+    ax2.set_xlim(0.8, max(all_ks) * 1.2)
+
+    # Match y-axis ranges
+    if np.any(valid_dinov2) and np.any(valid_dinov3):
+        y_min = min(np.min(dinov2_lowers[valid_dinov2]), np.min(dinov3_lowers[valid_dinov3]))
+        y_max = max(np.max(dinov2_uppers[valid_dinov2]), np.max(dinov3_uppers[valid_dinov3]))
+        y_range = y_max - y_min
+        ax1.set_ylim(y_min - 0.05 * y_range, y_max + 0.05 * y_range)
+        ax2.set_ylim(y_min - 0.05 * y_range, y_max + 0.05 * y_range)
+
+    # Add super title
+    decoder_name = "DPT" if decoder_type == "dpt" else "Simple Decoder"
+    plt.suptitle(f'Canopy Height Prediction: Effect of Lighting Subspace Removal ({decoder_name})',
+                fontsize=16, y=0.98)
+    plt.tight_layout()
+
+    # Save plot
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"Saved comparison plot: {output_path}")
+
+def main():
+    parser = argparse.ArgumentParser(description="Aggregate CV results into model comparison plots")
+    parser.add_argument("--results_dir", type=str, default="results/light_subspace_removal",
+                       help="Base results directory")
+    parser.add_argument("--output_dir", type=str, default="plots",
+                       help="Output directory for plots")
+    args = parser.parse_args()
+
+    # Process both decoder types
+    decoder_types = ["simple_decoder", "dpt"]
+    model_configs = ["dinov2_base", "dinov3_sat"]
+
+    for decoder_type in decoder_types:
+        print(f"\n=== Processing {decoder_type} ===")
+
+        # Load results for both models
+        dinov2_results = load_results_for_model(args.results_dir, "dinov2_base", decoder_type)
+        dinov3_results = load_results_for_model(args.results_dir, "dinov3_sat", decoder_type)
+
+        if not dinov2_results and not dinov3_results:
+            print(f"No results found for {decoder_type}, skipping")
             continue
 
-        # Check all folds have same number of epochs
-        epochs = [len(r["val_rmse_history"]) for r in fold_results]
-        if len(set(epochs)) > 1:
-            print(f"k={k:>2}: Inconsistent epoch counts: {epochs}")
-            continue
+        # Create comparison plot
+        output_path = os.path.join(args.output_dir, f"cv_comparison_{decoder_type}.png")
+        create_comparison_plot(dinov2_results, dinov3_results, decoder_type, output_path)
 
-        best_epoch, best_mean, best_std, fold_rmses, mean_hist, std_hist = compute_cv_metrics(fold_results)
+        # Print summary statistics
+        print(f"\n{decoder_type} Summary:")
+        for model_config in model_configs:
+            results = dinov2_results if model_config == "dinov2_base" else dinov3_results
+            if not results:
+                print(f"  {model_config}: No results")
+                continue
 
-        # Format fold RMSEs
-        fold_str = ", ".join(f"{x:.3f}" for x in fold_rmses)
-
-        print(f"k={k:>2}: {best_epoch+1:>3}/50     | {best_mean:.3f} ± {best_std:.3f} | [{fold_str}]")
-
-        # Store for plotting
-        if args.plot:
-            plot_data[k] = {
-                'mean_history': mean_hist,
-                'std_history': std_hist,
-                'best_epoch': best_epoch,
-                'fold_results': fold_results
-            }
-
-    # Optional plotting
-    if args.plot and plot_data:
-        os.makedirs(args.outdir, exist_ok=True)
-
-        # Plot 1: Learning curves for all k values
-        fig, ax = plt.subplots(figsize=(12, 8))
-
-        print(f"Plotting learning curves for k values: {sorted(plot_data.keys())}")
-
-        for k in sorted(plot_data.keys()):
-            data = plot_data[k]
-            epochs = np.arange(1, len(data['mean_history']) + 1)
-            mean_hist = data['mean_history']
-            std_hist = data['std_history']
-            best_epoch = data['best_epoch']
-
-            # Plot mean with error bars
-            ax.plot(epochs, mean_hist, label=f'k={k}', marker='o', markersize=3, alpha=0.8)
-            ax.fill_between(epochs, mean_hist - std_hist, mean_hist + std_hist, alpha=0.2)
-
-            # Mark best epoch
-            ax.axvline(x=best_epoch+1, color=ax.lines[-1].get_color(),
-                      linestyle='--', alpha=0.5, linewidth=1)
-
-        ax.set_xlabel('Epoch')
-        ax.set_ylabel('Validation RMSE (cm)')
-        ax.set_title('Cross-Validated Learning Curves')
-        ax.legend()
-        ax.grid(True, alpha=0.3)
-
-        plot_path = os.path.join(args.outdir, 'cv_learning_curves.png')
-        plt.savefig(plot_path, dpi=150, bbox_inches='tight')
-        print(f"\nSaved learning curves to {plot_path}")
-
-        # Plot 2: Best CV RMSE vs k with 95% CI ribbon
-        fig, ax = plt.subplots(figsize=(10, 6))
-
-        ks = sorted(plot_data.keys())
-        best_rmses = []
-        ci_95_lower = []
-        ci_95_upper = []
-
-        for k in ks:
-            data = plot_data[k]
-            best_epoch = data['best_epoch']
-
-            # Get RMSE values for all folds at best epoch
-            fold_rmses = np.array([r['val_rmse_history'][best_epoch] for r in data['fold_results']])
-
-            mean_rmse = fold_rmses.mean()
-            std_rmse = fold_rmses.std(ddof=1)  # Sample standard deviation
-            n_folds = len(fold_rmses)
-
-            # Calculate 95% confidence interval using t-distribution
-            t_critical = stats.t.ppf(0.975, df=n_folds-1)  # 97.5th percentile for 95% CI
-            margin_error = t_critical * std_rmse / np.sqrt(n_folds)
-
-            best_rmses.append(mean_rmse)
-            ci_95_lower.append(mean_rmse - margin_error)
-            ci_95_upper.append(mean_rmse + margin_error)
-
-        best_rmses = np.array(best_rmses)
-        ci_95_lower = np.array(ci_95_lower)
-        ci_95_upper = np.array(ci_95_upper)
-
-        # Plot line with 95% CI ribbon
-        ax.plot(ks, best_rmses, 'o-', color='steelblue', linewidth=2, markersize=6)
-        ax.fill_between(ks, ci_95_lower, ci_95_upper, color='steelblue', alpha=0.3)
-
-        ax.set_xlabel('k (Number of PCs Removed)', fontsize=12)
-        ax.set_ylabel('Best CV RMSE (cm)', fontsize=12)
-        ax.grid(True, alpha=0.3)
-
-        plot_path = os.path.join(args.outdir, 'cv_performance_vs_k.png')
-        plt.savefig(plot_path, dpi=150, bbox_inches='tight')
-        print(f"Saved performance plot to {plot_path}")
-
-        plt.close('all')
-
-    # Show dataset info
-    if by_k:
-        sample_result = list(by_k.values())[0][0]
-        if "token_grid" in sample_result and "out_size" in sample_result:
-            g = sample_result["token_grid"]
-            out = sample_result["out_size"]
-            print(f"\nToken grid: H={g[0]} W={g[1]} D={g[2]} | Supervision size: {out}×{out}")
+            print(f"  {model_config}:")
+            for k in sorted(results.keys()):
+                mean, lower, upper = compute_cv_metrics(results[k])
+                if mean is not None:
+                    n_folds = len(results[k])
+                    print(f"    k={k:3d}: {mean:.2f} ± {(upper-lower)/2:.2f} cm (n={n_folds})")
+                else:
+                    print(f"    k={k:3d}: No valid results")
 
 if __name__ == "__main__":
     main()

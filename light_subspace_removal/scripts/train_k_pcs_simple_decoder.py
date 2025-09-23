@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """
-Patch-agnostic dense CHM regression from pre-encoded DINOv3 patch tokens.
+Patch-agnostic dense CHM regression from pre-encoded DINOv2/DINOv3 patch tokens.
 
+- Supports both dinov2_base and dinov3_sat configurations from HF dataset
 - Infers token grid H×W from X_patch shape [M, Np, D] (requires Np be a square).
 - Decoder upsamples from [D, H, W] to [1, H_out, W_out] where H_out/W_out are args (default 224).
 - tcSVD lighting subspace removal with rank k (0 = baseline).
-- 5-fold CV grouped by tile id, but THIS SCRIPT runs ONE (fold, k) job (for Slurm arrays).
-- Trains 50 epochs (no early stopping) with default Adam; reports best-epoch RMSE@H_out×W_out.
-- Writes JSON: results_cv/cv_fold{fold}_k{k}.json
+- Spatio-temporal CV: 5 spatial folds × 3 temporal holdouts = 15 validation metrics.
+- Trains 50 epochs (no early stopping) with AdamW; reports validation RMSE history.
+- Writes JSON: results/{model_config}/simple_decoder/cv_s{spatial}_t{temporal}_k{k}.json
 
 Usage:
-  python train_k_pcs.py --fold 0 --k 3 --outdir results_cv --out_size 224
+  python train_k_pcs_simple_decoder.py --model_config dinov2_base --spatial_fold 0 --temporal_holdout 0 --k 3
 """
 
 import argparse, json, os, random
@@ -112,18 +113,57 @@ def apply_projection_np(X_patch: np.ndarray, Q: torch.Tensor | None):
 # ---------------------------
 # Data (HF)
 # ---------------------------
-def load_arrays_from_hf(H_out: int, W_out: int):
-    ds = load_dataset("mpg-ranch/light-stable-semantics")
-    Xp, ids, Y = [], [], []
-    for ex in ds['train']:
-        for key in ('t0', 't1', 't2'):
+def load_arrays_from_hf(model_config: str, temporal_holdout: int, H_out: int, W_out: int):
+    """
+    Load data for spatio-temporal CV.
+    temporal_holdout: 0=train on t1,t2 validate on t0; 1=train on t0,t2 validate on t1; 2=train on t0,t1 validate on t2
+    """
+    # Load embedding dataset and default dataset (for canopy height)
+    ds_embed = load_dataset("mpg-ranch/light-stable-semantics", model_config, split='train')
+    ds_default = load_dataset("mpg-ranch/light-stable-semantics", "default", split='train')
+
+    # Create mapping from idx to canopy height
+    canopy_map = {ex['idx']: ex['canopy_height'] for ex in ds_default}
+
+    # Define temporal splits
+    time_keys = ['t0', 't1', 't2']
+    if temporal_holdout == 0:  # Validate on morning
+        train_keys = ['t1', 't2']
+        val_key = 't0'
+    elif temporal_holdout == 1:  # Validate on noon
+        train_keys = ['t0', 't2']
+        val_key = 't1'
+    else:  # temporal_holdout == 2, validate on afternoon
+        train_keys = ['t0', 't1']
+        val_key = 't2'
+
+    Xp_train, ids_train, Y_train = [], [], []
+    Xp_val, ids_val, Y_val = [], [], []
+
+    for ex in ds_embed:
+        idx = ex['idx']
+        canopy_height = canopy_map[idx]
+        target = make_target(canopy_height, H_out, W_out).numpy()  # [1,H_out,W_out]
+
+        # Add training time points
+        for key in train_keys:
             tokens = np.array(ex[f'patch_{key}'], dtype=np.float32)  # [Np,D]
-            Xp.append(tokens)
-            ids.append(ex['idx'])
-            Y.append(make_target(ex['canopy_height'], H_out, W_out).numpy())  # [1,H_out,W_out]
-    Xp = np.stack(Xp, 0)     # [M,Np,D]
-    Y  = np.stack(Y, 0)      # [M,1,H_out,W_out]
-    return Xp, ids, Y
+            Xp_train.append(tokens)
+            ids_train.append(idx)
+            Y_train.append(target)
+
+        # Add validation time point
+        tokens = np.array(ex[f'patch_{val_key}'], dtype=np.float32)  # [Np,D]
+        Xp_val.append(tokens)
+        ids_val.append(idx)
+        Y_val.append(target)
+
+    Xp_train = np.stack(Xp_train, 0)  # [M_train,Np,D]
+    Y_train = np.stack(Y_train, 0)    # [M_train,1,H_out,W_out]
+    Xp_val = np.stack(Xp_val, 0)      # [M_val,Np,D]
+    Y_val = np.stack(Y_val, 0)        # [M_val,1,H_out,W_out]
+
+    return (Xp_train, ids_train, Y_train), (Xp_val, ids_val, Y_val)
 
 class DenseSplit(Dataset):
     def __init__(self, X_patch, Y, H, W):
@@ -219,12 +259,14 @@ def eval_epoch(model, loader, device):
 def main():
     ap = argparse.ArgumentParser()
     # Legacy single-experiment arguments (for backward compatibility)
-    ap.add_argument("--fold", type=int, default=None, help="fold index in [0..4]")
+    ap.add_argument("--spatial_fold", type=int, default=None, help="spatial fold index in [0..4]")
+    ap.add_argument("--temporal_holdout", type=int, default=None, help="temporal holdout in [0..2]")
     ap.add_argument("--k", type=int, default=None, help="tcSVD rank (0=baseline)")
+    ap.add_argument("--model_config", type=str, default=None, help="dinov2_base or dinov3_sat")
     # New multi-experiment arguments
     ap.add_argument("--job_id", type=int, default=None)
-    ap.add_argument("--total_jobs", type=int, default=24)
-    ap.add_argument("--total_configs", type=int, default=50)
+    ap.add_argument("--total_jobs", type=int, default=8)
+    ap.add_argument("--total_configs", type=int, default=330)
     # Other arguments
     ap.add_argument("--outdir", type=str, default="results/light_subspace_removal")
     ap.add_argument("--seed", type=int, default=42)
@@ -238,14 +280,20 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     set_seed(args.seed)
 
-    # Determine which k/fold combinations to run
+    # Determine which configurations to run
     if args.job_id is not None:
         # Multi-experiment mode: calculate which configs this job handles
         KS = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512]
-        FOLDS = [0, 1, 2, 3, 4]
+        SPATIAL_FOLDS = [0, 1, 2, 3, 4]
+        TEMPORAL_HOLDOUTS = [0, 1, 2]
+        MODEL_CONFIGS = ['dinov2_base', 'dinov3_sat']
 
-        # Generate all k/fold combinations
-        all_configs = [(k, fold) for fold in FOLDS for k in KS]
+        # Generate all combinations: k × spatial_fold × temporal_holdout × model_config
+        all_configs = [(k, spatial_fold, temporal_holdout, model_config)
+                      for model_config in MODEL_CONFIGS
+                      for spatial_fold in SPATIAL_FOLDS
+                      for temporal_holdout in TEMPORAL_HOLDOUTS
+                      for k in KS]
         assert len(all_configs) == args.total_configs, f"Expected {args.total_configs} configs, got {len(all_configs)}"
 
         # Distribute configs across jobs
@@ -261,49 +309,63 @@ def main():
             end_idx = start_idx + configs_per_job
 
         job_configs = all_configs[start_idx:end_idx]
-        print(f"Job {args.job_id} handling {len(job_configs)} configs: {job_configs}")
+        print(f"Job {args.job_id} handling {len(job_configs)} configs")
     else:
         # Legacy single-experiment mode
-        if args.fold is None or args.k is None:
-            raise ValueError("Either provide --job_id for multi-experiment mode, or both --fold and --k for single-experiment mode")
-        job_configs = [(args.k, args.fold)]
+        if args.spatial_fold is None or args.temporal_holdout is None or args.k is None or args.model_config is None:
+            raise ValueError("Either provide --job_id for multi-experiment mode, or all single-experiment arguments")
+        job_configs = [(args.k, args.spatial_fold, args.temporal_holdout, args.model_config)]
 
-    # Load once to infer grid and build targets at requested size
-    X_patch, ids, Y = load_arrays_from_hf(H_out=args.out_size, W_out=args.out_size)  # [M,Np,D], [M,1,O,O]
-    H, W, D = infer_token_grid(X_patch)
-    print(f"Inferred token grid: H={H}, W={W}, D={D}; supervising at {args.out_size}x{args.out_size}")
-
-    # Group by tile id; build KFold (tile-level) - prepare once
-    groups = defaultdict(list)
-    for i, tid in enumerate(ids): groups[tid].append(i)
-    tiles = sorted(groups.keys())
-    kf = KFold(n_splits=5, shuffle=True, random_state=args.seed)
-    folds = list(kf.split(tiles))
-
-    # Loop over all k/fold combinations assigned to this job
-    for k, fold in job_configs:
-        print(f"\n=== Running k={k}, fold={fold} ===")
+    # Loop over all configurations assigned to this job
+    for k, spatial_fold, temporal_holdout, model_config in job_configs:
+        print(f"\n=== Running k={k}, spatial_fold={spatial_fold}, temporal_holdout={temporal_holdout}, model_config={model_config} ===")
 
         # Check if result already exists (resume capability)
-        out_path = os.path.join(args.outdir, f"cv_fold{fold}_k{k}.json")
+        model_outdir = os.path.join(args.outdir.replace('simple_decoder', ''), model_config, 'simple_decoder')
+        os.makedirs(model_outdir, exist_ok=True)
+        out_path = os.path.join(model_outdir, f"cv_s{spatial_fold}_t{temporal_holdout}_k{k}.json")
         if os.path.exists(out_path):
             print(f"Result already exists at {out_path}, skipping...")
             continue
 
-        assert 0 <= fold < 5, "fold must be 0..4"
+        assert 0 <= spatial_fold < 5, "spatial_fold must be 0..4"
+        assert 0 <= temporal_holdout < 3, "temporal_holdout must be 0..2"
 
-        tr_idx, va_idx = folds[fold]
-        tr_tiles = [tiles[i] for i in tr_idx]
-        va_tiles = [tiles[i] for i in va_idx]
-        tr_rows  = [j for t in tr_tiles for j in groups[t]]
-        va_rows  = [j for t in va_tiles for j in groups[t]]
+        # Load data with spatio-temporal split
+        (X_train, ids_train, Y_train), (X_val, ids_val, Y_val) = load_arrays_from_hf(
+            model_config, temporal_holdout, args.out_size, args.out_size)
 
-        Xtr, Ytr = X_patch[tr_rows], Y[tr_rows]
-        Xva, Yva = X_patch[va_rows], Y[va_rows]
-        id_tr = [ids[j] for j in tr_rows]
+        # Infer grid from training data
+        H, W, D = infer_token_grid(X_train)
+        print(f"Inferred token grid: H={H}, W={W}, D={D}; supervising at {args.out_size}x{args.out_size}")
+
+        # Group training data by tile id for spatial CV
+        train_groups = defaultdict(list)
+        for i, tid in enumerate(ids_train):
+            train_groups[tid].append(i)
+        train_tiles = sorted(train_groups.keys())
+
+        # Group validation data by tile id
+        val_groups = defaultdict(list)
+        for i, tid in enumerate(ids_val):
+            val_groups[tid].append(i)
+
+        # Apply spatial fold to training data
+        kf = KFold(n_splits=5, shuffle=True, random_state=args.seed)
+        spatial_folds = list(kf.split(train_tiles))
+
+        tr_idx, va_idx = spatial_folds[spatial_fold]
+        tr_tiles = [train_tiles[i] for i in tr_idx]
+        va_tiles = [train_tiles[i] for i in va_idx]
+        tr_rows = [j for t in tr_tiles for j in train_groups[t]]
+        va_rows = [j for t in va_tiles for j in train_groups[t]]
+
+        Xtr, Ytr = X_train[tr_rows], Y_train[tr_rows]
+        Xva, Yva = X_train[va_rows], Y_train[va_rows]
+        id_tr = [ids_train[j] for j in tr_rows]
 
         # Fit tcSVD on TRAIN only; project train/val
-        Q = estimate_Q_train_only_patchwise(Xtr, id_tr, T=3, k=k)
+        Q = estimate_Q_train_only_patchwise(Xtr, id_tr, T=2, k=k)  # T=2 since we use 2 time points for training
         XtrP = apply_projection_np(Xtr, Q)
         XvaP = apply_projection_np(Xva, Q)
 
@@ -313,7 +375,7 @@ def main():
         train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, num_workers=0, pin_memory=True)
         val_loader   = DataLoader(val_ds,   batch_size=args.batch_size, shuffle=False, num_workers=0, pin_memory=True)
 
-        # Model + optimizer (default Adam)
+        # Model + optimizer (AdamW)
         model = GenericDenseDecoder(c_in=D, H=H, W=W, H_out=args.out_size, W_out=args.out_size,
                                     base=args.base, dropout=args.dropout).to(device)
         opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
@@ -324,13 +386,14 @@ def main():
             train_epoch(model, opt, train_loader, device)
             rm = eval_epoch(model, val_loader, device)
             val_rmse_history.append(rm)
-            print(f"[fold={fold} k={k}] epoch {epoch:03d}  val_RMSE@{args.out_size} = {rm:.3f} cm")
+            print(f"[s{spatial_fold}_t{temporal_holdout}_k{k}] epoch {epoch:03d}  val_RMSE@{args.out_size} = {rm:.3f} cm")
 
         # Save metrics JSON
-        os.makedirs(args.outdir, exist_ok=True)
         result = {
-            "fold": fold,
+            "spatial_fold": spatial_fold,
+            "temporal_holdout": temporal_holdout,
             "k": k,
+            "model_config": model_config,
             "seed": args.seed,
             "epochs": args.epochs,
             "val_rmse_history": [round(x, 6) for x in val_rmse_history],
