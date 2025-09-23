@@ -206,39 +206,62 @@ def encode_batch_for_model(batch, model_info):
     }
 
 def purge_all_files(api, repo_id):
-    """Completely purge ALL files from the repository."""
-    print(f"\n=== PURGING ALL FILES FROM {repo_id} ===")
+    """Purge dataset files (parquet) and metadata (dataset_infos.json) from repository."""
+    print(f"\n=== PURGING DATASET FILES FROM {repo_id} ===")
     try:
         all_files = api.list_repo_files(repo_id=repo_id, repo_type="dataset")
-        for file_path in all_files:
+
+        # Filter to only dataset files we want to delete
+        files_to_delete = [
+            f for f in all_files
+            if f.endswith('.parquet') or f == 'dataset_infos.json'
+        ]
+
+        if not files_to_delete:
+            print("  No dataset files to delete")
+            return
+
+        for file_path in files_to_delete:
             try:
                 api.delete_file(path_in_repo=file_path, repo_id=repo_id, repo_type="dataset")
                 print(f"  Deleted: {file_path}")
             except Exception as e:
                 print(f"  Failed to delete {file_path}: {e}")
-        print(f"✅ Purged {len(all_files)} files from repository")
+
+        # Show what was preserved
+        preserved_files = [f for f in all_files if f not in files_to_delete]
+        if preserved_files:
+            print(f"  Preserved: {', '.join(preserved_files[:3])}{'...' if len(preserved_files) > 3 else ''}")
+
+        print(f"✅ Purged {len(files_to_delete)} dataset files from repository")
     except Exception as e:
         print(f"⚠️ Warning: Could not purge files: {e}")
 
 def push_config_separately(api, repo_id, config_name, train_dataset, test_dataset):
-    """Push a single config to HuggingFace with its own train/test split."""
+    """Push a single config to HuggingFace with separate train/test pushes."""
     print(f"\n=== Pushing {config_name} config ===")
 
-    # Create DatasetDict for this config
-    config_dict = DatasetDict({
-        'train': train_dataset,
-        'test': test_dataset
-    })
-
-    # Push with config name
     try:
-        config_dict.push_to_hub(
+        # Push train split
+        train_dataset.push_to_hub(
             repo_id,
             config_name=config_name,
+            split='train',
             max_shard_size=f"{TARGET_SHARD_SIZE_MB}MB",
-            commit_message=f"Push {config_name} config"
+            commit_message=f"Push {config_name} train split"
         )
-        print(f"✅ Pushed {config_name}: {train_dataset.num_rows} train, {test_dataset.num_rows} test")
+        print(f"✅ Pushed {config_name} train: {train_dataset.num_rows} samples")
+
+        # Push test split
+        test_dataset.push_to_hub(
+            repo_id,
+            config_name=config_name,
+            split='test',
+            max_shard_size=f"{TARGET_SHARD_SIZE_MB}MB",
+            commit_message=f"Push {config_name} test split"
+        )
+        print(f"✅ Pushed {config_name} test: {test_dataset.num_rows} samples")
+
     except Exception as e:
         print(f"❌ Failed to push {config_name}: {e}")
         raise
@@ -323,6 +346,16 @@ def main():
     )
     print(f"Split: {len(train_indices)} train, {len(test_indices)} test")
 
+    # Create efficient index mappings for splitting
+    train_indices_set = set(train_indices)
+    test_indices_set = set(test_indices)
+
+    # Pre-compute index positions for efficient dataset splitting
+    train_positions = [i for i, idx in enumerate(df_base['idx']) if idx in train_indices_set]
+    test_positions = [i for i, idx in enumerate(df_base['idx']) if idx in test_indices_set]
+
+    print(f"Index positions: {len(train_positions)} train, {len(test_positions)} test")
+
     # -------------------------
     # Purge repository if requested
     # -------------------------
@@ -345,9 +378,9 @@ def main():
 
     default_dataset = Dataset.from_pandas(df_base, features=default_features, preserve_index=False)
 
-    # Split default dataset
-    default_train = default_dataset.filter(lambda ex: ex['idx'] in train_indices)
-    default_test = default_dataset.filter(lambda ex: ex['idx'] in test_indices)
+    # Split default dataset efficiently using select()
+    default_train = default_dataset.select(train_positions)
+    default_test = default_dataset.select(test_positions)
 
     print(f"Default: {default_train.num_rows} train, {default_test.num_rows} test")
 
@@ -385,9 +418,9 @@ def main():
             remove_columns=['image_t0', 'image_t1', 'image_t2']
         )
 
-        # Split embedding dataset
-        embedding_train = embedding_dataset.filter(lambda ex: ex['idx'] in train_indices)
-        embedding_test = embedding_dataset.filter(lambda ex: ex['idx'] in test_indices)
+        # Split embedding dataset efficiently using select()
+        embedding_train = embedding_dataset.select(train_positions)
+        embedding_test = embedding_dataset.select(test_positions)
 
         print(f"{model_name}: {embedding_train.num_rows} train, {embedding_test.num_rows} test")
 
