@@ -10,16 +10,37 @@ This project aims to develop vision encoders that maintain semantic stability un
 
 ## Dataset Structure
 
-The dataset consists of 1024x1024 pixel tiles extracted from three orthomosaics, with each tile representing the same geographic location captured under different lighting conditions. Each tile now bundles the RGB imagery, a co-registered canopy height model (CHM) raster, and pre-computed DINOv3 embeddings for efficient feature analysis.
+The dataset consists of 1024x1024 pixel tiles extracted from three orthomosaics, with each tile representing the same geographic location captured under different lighting conditions. The dataset is organized into three configurations on Hugging Face Hub, each serving different research needs.
 
-Tiles are randomly partitioned into an 80/20 train/test split.
+All configurations share consistent 80/20 train/test splits with matching tile identifiers for cross-referencing.
 
-**Dataset Schema:**
+### Configuration 1: `default`
+Raw imagery and environmental data for direct analysis:
 - **Images**: RGB tiles for three time points (10:00, 12:00, 15:00)
-- **Canopy Height**: 1024×1024 integer grid (centimetre units) derived from the canopy height model
-- **Global Features**: DINOv3 CLS tokens (1024-length vectors) capturing scene-level semantics
-- **Spatial Features**: DINOv3 patch tokens (196×1024 arrays) encoding spatial relationships
+- **Canopy Height**: 1024×1024 integer grid (centimeter units) from canopy height model
 - **Identifiers**: Location-based tile IDs for geographic referencing
+
+### Configuration 2: `dinov2_base`
+Pre-computed DINOv2 Base (ViT-B/14) embeddings:
+- **Global Features**: CLS tokens (768-dim vectors) capturing scene-level semantics
+- **Spatial Features**: Patch tokens (256×768 arrays) from 16×16 spatial grid
+- **Identifiers**: Matching tile IDs for cross-reference with other configs
+
+### Configuration 3: `dinov3_sat`
+Pre-computed DINOv3 Large (ViT-L/16) embeddings with satellite pretraining:
+- **Global Features**: CLS tokens (1024-dim vectors) capturing scene-level semantics
+- **Spatial Features**: Patch tokens (196×1024 arrays) from 14×14 spatial grid
+- **Identifiers**: Matching tile IDs for cross-reference with other configs
+
+**Usage:**
+```python
+from datasets import load_dataset
+
+# Load specific configurations
+dataset_default = load_dataset("mpg-ranch/light-stable-semantics", "default")
+dataset_dinov2 = load_dataset("mpg-ranch/light-stable-semantics", "dinov2_base")
+dataset_dinov3 = load_dataset("mpg-ranch/light-stable-semantics", "dinov3_sat")
+```
 
 The data is available on Hugging Face Hub at [mpg-ranch/light-stable-semantics](https://huggingface.co/datasets/mpg-ranch/light-stable-semantics).
 
@@ -30,7 +51,7 @@ The dataset creation follows a rigorous preprocessing pipeline:
 1. **00_tile_data.py**: Tiles orthomosaics and co-registers the canopy height model into 1024×1024 outputs with quality control
 2. **01_exclude_temporal_anomalies.py**: Removes tiles with transient objects, ensuring both RGB and CHM rasters are excluded together
 3. **02_push_docs_to_hf.py**: Uploads documentation and metadata to Hugging Face Hub
-4. **03_push_imgs_hf.py**: Quantises canopy height to centimetres, extracts DINOv3 embeddings, performs the 80/20 train/test split, and uploads the combined dataset
+4. **03_push_imgs_hf.py**: Quantises canopy height to centimeters, extracts DINOv2 and DINOv3 embeddings, performs consistent 80/20 train/test splits, and uploads all three dataset configurations
 
 This pipeline ensures high-quality, semantically consistent tiles suitable for training lighting-robust vision models.
 

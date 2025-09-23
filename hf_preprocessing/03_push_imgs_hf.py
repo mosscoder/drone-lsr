@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import argparse
 import logging
 from pathlib import Path
 from collections import defaultdict
@@ -7,7 +8,8 @@ import pandas as pd
 import torch
 import numpy as np
 import rasterio
-from datasets import Dataset, Features, Image, Value
+from sklearn.model_selection import train_test_split
+from datasets import Dataset, DatasetDict, Features, Image, Value
 from datasets.features import Sequence, Array2D
 from huggingface_hub import HfApi
 from transformers import AutoModel, AutoImageProcessor
@@ -21,7 +23,6 @@ RGB_TILE_DIR = Path('data/raster/tiles/rgb')
 CANOPY_TILE_DIR = Path('data/raster/tiles/chm')
 TARGET_SHARD_SIZE_MB = 500
 TIMES = [1000, 1200, 1500]   # t0, t1, t2
-MODEL_ID = "facebook/dinov3-vitl16-pretrain-sat493m"
 BATCH_SIZE = 16
 WRITER_BATCH_SIZE = 2000
 TILE_SIZE = 1024
@@ -29,10 +30,22 @@ CANOPY_SCALE = 100  # meters to centimeters for integer storage
 CANOPY_FILL_VALUE = np.iinfo(np.int32).min
 TRAIN_TEST_SEED = 42
 
+# Model configurations
+MODEL_CONFIGS = {
+    'dinov2_base': {
+        'id': 'facebook/dinov2-base',
+        'description': 'DINOv2 Base (ViT-B/14)'
+    },
+    'dinov3_sat': {
+        'id': 'facebook/dinov3-vitl16-pretrain-sat493m',
+        'description': 'DINOv3 Large with SAT pretraining'
+    }
+}
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # -------------------------
-# Model (load once)
+# Device setup
 # -------------------------
 if torch.cuda.is_available():
     device = "cuda"
@@ -41,34 +54,84 @@ elif getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
 else:
     device = "cpu"
 
-processor = AutoImageProcessor.from_pretrained(MODEL_ID)
-model = AutoModel.from_pretrained(MODEL_ID).to(device).eval()
+print(f"Using device: {device}")
 
-N_REG = model.config.num_register_tokens
-DIM = model.config.hidden_size
+# -------------------------
+# Model loading and inspection
+# -------------------------
+def load_and_inspect_model(model_config_name, model_id):
+    """Load model and print its configuration details."""
+    print(f"\n=== Loading {model_config_name} ===")
+    print(f"Model ID: {model_id}")
 
-img_size = getattr(model.config, "image_size")
-ps = model.config.patch_size
+    processor = AutoImageProcessor.from_pretrained(model_id)
+    model = AutoModel.from_pretrained(model_id).to(device).eval()
 
-if isinstance(img_size, (tuple, list)):
-    h = img_size[0] // ps
-    w = img_size[1] // ps
-else:
-    h = w = img_size // ps
-N_PATCH = h * w
+    config = model.config
+    n_registers = getattr(config, 'num_register_tokens', 0)
+    hidden_size = config.hidden_size
+
+    # Calculate patch grid based on actual processing size (224x224)
+    processing_size = 224  # We process all images at 224x224
+    patch_size = config.patch_size
+
+    h = w = processing_size // patch_size
+    n_patches = h * w
+
+    print(f"  Hidden size: {hidden_size}")
+    print(f"  Processing size: {processing_size}x{processing_size}")
+    print(f"  Patch size: {patch_size}")
+    print(f"  Patch grid: {h}×{w} = {n_patches} patches")
+    print(f"  Register tokens: {n_registers}")
+    print(f"  Total tokens: 1 (CLS) + {n_registers} (registers) + {n_patches} (patches)")
+
+    return processor, model, {
+        'n_registers': n_registers,
+        'hidden_size': hidden_size,
+        'n_patches': n_patches,
+        'patch_grid': (h, w)
+    }
+
+# Load both models
+models = {}
+for config_name, config_info in MODEL_CONFIGS.items():
+    processor, model, specs = load_and_inspect_model(config_name, config_info['id'])
+    models[config_name] = {
+        'processor': processor,
+        'model': model,
+        'specs': specs,
+        'description': config_info['description']
+    }
 
 @torch.no_grad()
-def encode_images(pil_images):
-    pil_images = [im.convert("RGB") if hasattr(im, "mode") and im.mode != "RGB" else im for im in pil_images]
-    inputs = processor(images=pil_images, return_tensors="pt").to(device)
+def encode_images(image_paths, model_info):
+    """Encode images from paths with the specified model."""
+    from PIL import Image
+
+    processor = model_info['processor']
+    model = model_info['model']
+    n_registers = model_info['specs']['n_registers']
+
+    # Load images from paths and ensure RGB mode
+    pil_images = []
+    for path in image_paths:
+        im = Image.open(path)
+        if im.mode != "RGB":
+            im = im.convert("RGB")
+        pil_images.append(im)
+
+    # Use processor with explicit size override to ensure 224x224 for both models
+    inputs = processor(images=pil_images, size={'height': 224, 'width': 224}, return_tensors="pt").to(device)
     outputs = model(**inputs)
     tokens = outputs.last_hidden_state              # [B, 1+R+N, D]
+
     cls = tokens[:, 0]                              # [B, D]
-    patches = tokens[:, 1 + N_REG:]                 # [B, N, D]
+    patches = tokens[:, 1 + n_registers:]           # [B, N, D]
+
     return cls.cpu().numpy().astype(np.float32), patches.cpu().numpy().astype(np.float32)
 
 # -------------------------
-# Scan tiles
+# Tile scanning (unchanged)
 # -------------------------
 def scan_tiles():
     logging.info("Scanning tiles directory...")
@@ -94,11 +157,9 @@ def scan_tiles():
     logging.info(f"Found {len(complete_tiles)} complete tile sets")
     return complete_tiles
 
-
 def canopy_tile_path(location_id: str) -> Path:
     """Return the expected path for a canopy tile."""
     return CANOPY_TILE_DIR / f"{location_id}.tif"
-
 
 def load_canopy_tile(location_id: str):
     """Load and quantize the canopy height tile for a location."""
@@ -124,12 +185,14 @@ def load_canopy_tile(location_id: str):
     return canopy_tile
 
 # -------------------------
-# Map fn: add embeddings
+# Encoding functions for each config
 # -------------------------
-def encode_batch(batch):
-    cls0, patch0 = encode_images(batch['image_t0'])
-    cls1, patch1 = encode_images(batch['image_t1'])
-    cls2, patch2 = encode_images(batch['image_t2'])
+def encode_batch_for_model(batch, model_name):
+    """Encode batch for a specific model."""
+    model_info = models[model_name]
+    cls0, patch0 = encode_images(batch['image_t0'], model_info)
+    cls1, patch1 = encode_images(batch['image_t1'], model_info)
+    cls2, patch2 = encode_images(batch['image_t2'], model_info)
     return {
         'cls_t0': cls0,
         'cls_t1': cls1,
@@ -143,8 +206,15 @@ def encode_batch(batch):
 # Main
 # -------------------------
 def main():
+    parser = argparse.ArgumentParser(description="Create multi-config HuggingFace dataset")
+    parser.add_argument("--debug", action="store_true",
+                       help="Process and encode images but don't push to HF")
+    args = parser.parse_args()
+
     repo_id = f"{hf_org}/{hf_repo}"
-    api = HfApi()
+
+    if not args.debug:
+        api = HfApi()
 
     # Scan and organize tiles
     tiles_dict = scan_tiles()
@@ -156,6 +226,7 @@ def main():
         logging.error("Missing canopy tile directory at %s", CANOPY_TILE_DIR)
         return 1
 
+    # Create base records with images and canopy
     records = []
     for location_id in sorted(tiles_dict.keys()):
         time_paths = tiles_dict[location_id]
@@ -174,53 +245,155 @@ def main():
         })
 
     if not records:
-        logging.error("No tiles available for push")
+        logging.error("No tiles available for processing")
         return 1
 
-    df = pd.DataFrame(records)
+    print(f"\nProcessing {len(records)} tile sets...")
 
-    features = Features({
+    # Create base DataFrame
+    df_base = pd.DataFrame(records)
+
+    # -------------------------
+    # Config 1: Default (images + canopy)
+    # -------------------------
+    print("\n=== Creating default config ===")
+    default_features = Features({
         'idx': Value('string'),
         'image_t0': Image(),
         'image_t1': Image(),
         'image_t2': Image(),
         'canopy_height': Array2D((TILE_SIZE, TILE_SIZE), dtype='int32'),
-        'cls_t0': Sequence(Value('float32'), length=DIM),
-        'cls_t1': Sequence(Value('float32'), length=DIM),
-        'cls_t2': Sequence(Value('float32'), length=DIM),
-        'patch_t0': Array2D((N_PATCH, DIM), dtype='float32'),
-        'patch_t1': Array2D((N_PATCH, DIM), dtype='float32'),
-        'patch_t2': Array2D((N_PATCH, DIM), dtype='float32'),
     })
 
-    dataset = Dataset.from_pandas(df, features=features, preserve_index=False)
-    dataset = dataset.map(
-        encode_batch,
-        batched=True,
-        batch_size=BATCH_SIZE,
-        features=features,
-        writer_batch_size=WRITER_BATCH_SIZE,
-    )
+    default_dataset = Dataset.from_pandas(df_base, features=default_features, preserve_index=False)
+    print(f"Default config: {default_dataset.num_rows} samples")
 
-    dataset_dict = dataset.train_test_split(
+    # -------------------------
+    # Config 2 & 3: Model embeddings
+    # -------------------------
+    datasets = {'default': default_dataset}
+
+    for model_name, model_info in models.items():
+        print(f"\n=== Creating {model_name} config ===")
+        specs = model_info['specs']
+
+        # Create features for this model
+        embedding_features = Features({
+            'idx': Value('string'),
+            'cls_t0': Sequence(Value('float32'), length=specs['hidden_size']),
+            'cls_t1': Sequence(Value('float32'), length=specs['hidden_size']),
+            'cls_t2': Sequence(Value('float32'), length=specs['hidden_size']),
+            'patch_t0': Array2D((specs['n_patches'], specs['hidden_size']), dtype='float32'),
+            'patch_t1': Array2D((specs['n_patches'], specs['hidden_size']), dtype='float32'),
+            'patch_t2': Array2D((specs['n_patches'], specs['hidden_size']), dtype='float32'),
+        })
+
+        # Create dataset with idx and image paths for encoding
+        df_embedding = df_base[['idx', 'image_t0', 'image_t1', 'image_t2']].copy()
+        embedding_dataset = Dataset.from_pandas(df_embedding, preserve_index=False)
+
+        # Encode with this model
+        print(f"Encoding with {model_info['description']}...")
+        embedding_dataset = embedding_dataset.map(
+            lambda batch: encode_batch_for_model(batch, model_name),
+            batched=True,
+            batch_size=BATCH_SIZE,
+            features=embedding_features,
+            writer_batch_size=WRITER_BATCH_SIZE,
+            remove_columns=['image_t0', 'image_t1', 'image_t2']  # Remove temp image cols
+        )
+
+        print(f"{model_name} config: {embedding_dataset.num_rows} samples")
+        datasets[model_name] = embedding_dataset
+
+    # -------------------------
+    # Create consistent train/test splits based on idx
+    # -------------------------
+    print("\n=== Creating consistent train/test splits ===")
+
+    # Split indices first to ensure consistency across all configs
+    all_indices = sorted(df_base['idx'].unique())
+    train_indices, test_indices = train_test_split(
+        all_indices,
         test_size=0.2,
-        seed=TRAIN_TEST_SEED,
-        shuffle=True,
-    )
-    logging.info(
-        "Split dataset into %d train and %d test rows",
-        dataset_dict["train"].num_rows,
-        dataset_dict["test"].num_rows,
+        random_state=TRAIN_TEST_SEED,
+        shuffle=True
     )
 
-    old_files = api.list_repo_files(repo_id=repo_id, repo_type="dataset")
-    parquet_files = [f for f in old_files if f.endswith('.parquet')]
-    for parquet_file in parquet_files:
-        api.delete_file(path_in_repo=parquet_file, repo_id=repo_id, repo_type="dataset")
+    print(f"Split {len(all_indices)} unique indices: {len(train_indices)} train, {len(test_indices)} test")
 
-    # Push to hub
-    dataset_dict.push_to_hub(repo_id, max_shard_size=f"{TARGET_SHARD_SIZE_MB}MB")
-    logging.info(f"Uploaded dataset with CLS + patch tokens → {repo_id}")
+    # Apply consistent splits to each config
+    split_dataset_dict = {}
+    for config_name, dataset in datasets.items():
+        # Create masks based on idx values
+        train_mask = [idx in train_indices for idx in dataset['idx']]
+        test_mask = [idx in test_indices for idx in dataset['idx']]
+
+        # Filter datasets
+        train_dataset = dataset.filter(lambda example, idx: example['idx'] in train_indices, with_indices=True)
+        test_dataset = dataset.filter(lambda example, idx: example['idx'] in test_indices, with_indices=True)
+
+        split_dataset_dict[config_name] = {
+            'train': train_dataset,
+            'test': test_dataset
+        }
+
+        print(f"{config_name}: {train_dataset.num_rows} train, {test_dataset.num_rows} test")
+
+        # Verify consistency (optional check)
+        train_idx_set = set(train_dataset['idx'])
+        test_idx_set = set(test_dataset['idx'])
+        assert train_idx_set == set(train_indices), f"Train indices mismatch for {config_name}"
+        assert test_idx_set == set(test_indices), f"Test indices mismatch for {config_name}"
+
+    print("\n✅ Verified: All configs have identical train/test splits based on idx")
+
+    if args.debug:
+        print("\n=== DEBUG MODE: Skipping HuggingFace upload ===")
+        print("Dataset structure:")
+        for config_name, splits in split_dataset_dict.items():
+            print(f"  {config_name}:")
+            print(f"    train: {splits['train'].num_rows} samples")
+            print(f"    test: {splits['test'].num_rows} samples")
+            print(f"    Features: {list(splits['train'].features.keys())}")
+        return 0
+
+    # -------------------------
+    # Upload to HuggingFace
+    # -------------------------
+    print(f"\n=== Uploading to {repo_id} ===")
+
+    # Remove old parquet files (only for the first config to avoid conflicts)
+    try:
+        old_files = api.list_repo_files(repo_id=repo_id, repo_type="dataset")
+        parquet_files = [f for f in old_files if f.endswith('.parquet')]
+        for parquet_file in parquet_files:
+            api.delete_file(path_in_repo=parquet_file, repo_id=repo_id, repo_type="dataset")
+        print(f"Removed {len(parquet_files)} old parquet files")
+    except Exception as e:
+        print(f"Warning: Could not clean old files: {e}")
+
+    # Push each config separately with proper config names
+    for config_name, splits in split_dataset_dict.items():
+        print(f"\nUploading {config_name} config...")
+        config_dataset_dict = DatasetDict({
+            'train': splits['train'],
+            'test': splits['test']
+        })
+        config_dataset_dict.push_to_hub(
+            repo_id,
+            config_name=config_name,
+            max_shard_size=f"{TARGET_SHARD_SIZE_MB}MB"
+        )
+        print(f"✅ {config_name}: {splits['train'].num_rows} train, {splits['test'].num_rows} test")
+
+    print(f"\n✅ Successfully uploaded all configs to {repo_id}")
+    print("\nDataset structure:")
+    for config_name, splits in split_dataset_dict.items():
+        print(f"  {config_name}:")
+        print(f"    train: {splits['train'].num_rows} samples")
+        print(f"    test: {splits['test'].num_rows} samples")
+
     return 0
 
 if __name__ == "__main__":

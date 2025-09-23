@@ -13,8 +13,10 @@ tags:
 - semantic-stability
 - vision-encoder
 - time-series
+- dinov2
 - dinov3
 - embeddings
+- multi-config
 pretty_name: Light Stable Semantics
 size_categories:
 - n<1K
@@ -24,11 +26,14 @@ size_categories:
 
 ## Dataset Description
 
-This dataset contains aerial orthomosaic tiles captured at three different times of day (10:00, 12:00, and 15:00). Each tile includes the original RGB images, a co-registered canopy height model (CHM) raster, and pre-computed DINOv3 embeddings extracted using `facebook/dinov3-vitl16-pretrain-sat493m`. The dataset is designed for adapting vision encoders that can maintain consistent feature representations despite changes in illumination, with applications in remote sensing and environmental monitoring.
+This dataset contains aerial orthomosaic tiles captured at three different times of day (10:00, 12:00, and 15:00). The dataset is organized into three configurations: `default` (raw images + canopy height), `dinov2_base` (DINOv2 embeddings), and `dinov3_sat` (DINOv3 embeddings). All configurations share consistent train/test splits with matching tile identifiers for cross-referencing. The dataset is designed for training vision encoders that maintain consistent feature representations despite changes in illumination, with applications in remote sensing and environmental monitoring.
 
-## Dataset Features
+## Dataset Configurations
 
-Each record in the dataset contains the following features:
+The dataset is organized into three configurations, each serving different research needs:
+
+### Configuration: `default`
+Raw imagery and environmental data for direct analysis:
 
 | Feature | Type | Shape | Description |
 |---------|------|--------|-------------|
@@ -36,61 +41,93 @@ Each record in the dataset contains the following features:
 | `image_t0` | Image | 1024×1024×3 | Morning capture at 10:00 AM (time=1000) |
 | `image_t1` | Image | 1024×1024×3 | Noon capture at 12:00 PM (time=1200) |
 | `image_t2` | Image | 1024×1024×3 | Afternoon capture at 3:00 PM (time=1500) |
+| `canopy_height` | int32 | [1024, 1024] | Canopy height grid in centimeters from canopy height model |
+
+### Configuration: `dinov2_base`
+Pre-computed DINOv2 Base (ViT-B/14) embeddings:
+
+| Feature | Type | Shape | Description |
+|---------|------|--------|-------------|
+| `idx` | string | - | Tile identifier matching other configurations |
+| `cls_t0` | float32 | [768] | DINOv2 CLS token (global features) for morning image |
+| `cls_t1` | float32 | [768] | DINOv2 CLS token (global features) for noon image |
+| `cls_t2` | float32 | [768] | DINOv2 CLS token (global features) for afternoon image |
+| `patch_t0` | float32 | [256, 768] | DINOv2 patch tokens (16×16 spatial grid) for morning image |
+| `patch_t1` | float32 | [256, 768] | DINOv2 patch tokens (16×16 spatial grid) for noon image |
+| `patch_t2` | float32 | [256, 768] | DINOv2 patch tokens (16×16 spatial grid) for afternoon image |
+
+### Configuration: `dinov3_sat`
+Pre-computed DINOv3 Large (ViT-L/16) embeddings with satellite pretraining:
+
+| Feature | Type | Shape | Description |
+|---------|------|--------|-------------|
+| `idx` | string | - | Tile identifier matching other configurations |
 | `cls_t0` | float32 | [1024] | DINOv3 CLS token (global features) for morning image |
 | `cls_t1` | float32 | [1024] | DINOv3 CLS token (global features) for noon image |
 | `cls_t2` | float32 | [1024] | DINOv3 CLS token (global features) for afternoon image |
-| `patch_t0` | float32 | [196, 1024] | DINOv3 patch tokens (spatial features) for morning image |
-| `patch_t1` | float32 | [196, 1024] | DINOv3 patch tokens (spatial features) for noon image |
-| `patch_t2` | float32 | [196, 1024] | DINOv3 patch tokens (spatial features) for afternoon image |
-| `canopy_height` | int32 | [1024, 1024] | Canopy height grid in centimetres derived from the canopy height model |
+| `patch_t0` | float32 | [196, 1024] | DINOv3 patch tokens (14×14 spatial grid) for morning image |
+| `patch_t1` | float32 | [196, 1024] | DINOv3 patch tokens (14×14 spatial grid) for noon image |
+| `patch_t2` | float32 | [196, 1024] | DINOv3 patch tokens (14×14 spatial grid) for afternoon image |
 
-The canopy height layer is reprojected to align with the RGB tiles and multiplied by 100 before casting to `int32`, so each value represents centimetres above ground. Missing data is encoded with `-2147483648` (the minimum 32-bit integer).
-
-The dataset is partitioned with an 80%/20% train/test split.
+**Notes:**
+- Canopy height values represent centimeters above ground; missing data is encoded as `-2147483648`
+- All configurations use consistent 80%/20% train/test splits with matching `idx` values
+- Patch tokens represent spatial features in different grid resolutions: 16×16 (DINOv2) vs 14×14 (DINOv3)
 
 ## Usage Example
 
 ```python
 from datasets import load_dataset
 
-# Load the dataset
-dataset = load_dataset("mpg-ranch/light-stable-semantics")
+# Load specific configurations
+dataset_default = load_dataset("mpg-ranch/light-stable-semantics", "default")
+dataset_dinov2 = load_dataset("mpg-ranch/light-stable-semantics", "dinov2_base")
+dataset_dinov3 = load_dataset("mpg-ranch/light-stable-semantics", "dinov3_sat")
 
-# Access a single training record
-sample = dataset['train'][0]
+# Access raw imagery and canopy height
+sample_default = dataset_default['train'][0]
+morning_image = sample_default['image_t0']      # RGB image
+noon_image = sample_default['image_t1']         # RGB image
+afternoon_image = sample_default['image_t2']    # RGB image
+canopy_height = sample_default['canopy_height'] # Height grid in cm
+tile_id = sample_default['idx']                 # Geographic identifier
 
-# Images for the three time points
-morning_image = sample['image_t0']
-noon_image = sample['image_t1'] 
-afternoon_image = sample['image_t2']
+# Access DINOv2 embeddings (same tile via matching idx)
+sample_dinov2 = dataset_dinov2['train'][0]
+dinov2_cls_morning = sample_dinov2['cls_t0']     # Global features (768-dim)
+dinov2_patches_morning = sample_dinov2['patch_t0'] # Spatial features (256×768)
 
-# Pre-computed DINOv3 embeddings
-morning_cls = sample['cls_t0']     # Global features (1024-dim)
-noon_cls = sample['cls_t1']        # Global features (1024-dim)
-afternoon_cls = sample['cls_t2']   # Global features (1024-dim)
+# Access DINOv3 embeddings (same tile via matching idx)
+sample_dinov3 = dataset_dinov3['train'][0]
+dinov3_cls_morning = sample_dinov3['cls_t0']     # Global features (1024-dim)
+dinov3_patches_morning = sample_dinov3['patch_t0'] # Spatial features (196×1024)
 
-morning_patches = sample['patch_t0']  # Spatial features (196×1024)
-noon_patches = sample['patch_t1']     # Spatial features (196×1024)
-afternoon_patches = sample['patch_t2'] # Spatial features (196×1024)
+# Verify consistent tile identifiers across configurations
+assert sample_default['idx'] == sample_dinov2['idx'] == sample_dinov3['idx']
 
-# Tile location identifier
-tile_id = sample['idx']  # Format: "{ROW}_{COL} of tiles within the original orthomosaic"
-
-# Co-registered canopy height (centimetres stored as int32)
-canopy_cm = sample['canopy_height']
-
-# Held-out evaluation tile
-test_sample = dataset['test'][0]
+# Access test sets for evaluation
+test_default = dataset_default['test'][0]
+test_dinov2 = dataset_dinov2['test'][0]
+test_dinov3 = dataset_dinov3['test'][0]
 ```
 
 ## Pre-computed Embeddings
 
-The dataset includes pre-computed embeddings extracted using the **facebook/dinov3-vitl16-pretrain-sat493m** model:
+The dataset includes pre-computed embeddings from two state-of-the-art vision transformers:
 
-- **CLS Tokens**: 1024-dimensional global feature vectors that capture scene-level semantics
-- **Patch Tokens**: 196×1024 arrays encoding spatial relationships and local features
-- **Purpose**: Enable efficient training and analysis without requiring on-the-fly feature extraction
-- **Model Details**: DINOv3 Vision Transformer Large (16×16 patches) pre-trained on satellite imagery
+### DINOv2 Base (`facebook/dinov2-base`)
+- **Architecture**: Vision Transformer Base with 14×14 patch size
+- **CLS Tokens**: 768-dimensional global feature vectors capturing scene-level semantics
+- **Patch Tokens**: 256×768 arrays (16×16 spatial grid) encoding local features
+- **Training**: Self-supervised learning on natural images
+
+### DINOv3 Large (`facebook/dinov3-vitl16-pretrain-sat493m`)
+- **Architecture**: Vision Transformer Large with 16×16 patch size
+- **CLS Tokens**: 1024-dimensional global feature vectors capturing scene-level semantics
+- **Patch Tokens**: 196×1024 arrays (14×14 spatial grid) encoding local features
+- **Training**: Self-supervised learning with satellite imagery pretraining
+
+**Purpose**: Enable efficient training and analysis without requiring on-the-fly feature extraction, while providing comparison between natural image and satellite-pretrained models.
 
 ## Dataset Information
 
@@ -122,7 +159,7 @@ If you use this dataset in your research, please cite:
   month={November},
   url={https://huggingface.co/datasets/mpg-ranch/light-stable-semantics},
   publisher={Hugging Face},
-  note={Aerial orthomosaic tiles with DINOv3 embeddings for light-stable semantic vision encoder training},
+  note={Aerial orthomosaic tiles with DINOv2 and DINOv3 embeddings for light-stable semantic vision encoder training},
   location={MPG Ranch, Montana, USA},
   survey_date={2024-11-07},
   organization={MPG Ranch}
