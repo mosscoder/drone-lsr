@@ -26,6 +26,15 @@ from datasets import load_dataset
 from sklearn.model_selection import KFold
 
 # ---------------------------
+# Helper functions for power-of-2 handling
+# ---------------------------
+def _is_pow2(x: int) -> bool:
+    return x > 0 and (x & (x - 1)) == 0
+
+def _next_pow2(x: int) -> int:
+    return 1 << (x - 1).bit_length()
+
+# ---------------------------
 # Repro
 # ---------------------------
 def set_seed(seed=1337):
@@ -193,25 +202,33 @@ class UpBlock(nn.Module):
 
 class GenericDenseDecoder(nn.Module):
     """
-    Input:  [B, D, H, W]  (inferred from tokens)
-    Output: [B, 1, H_out, W_out] where H_out/H == W_out/W == 2**n (power-of-two)
+    Input : [B, D, H, W]   (token grid)
+    Output: [B, 1, H_out, W_out]
+
+    - Builds a 2^n transposed-conv pyramid up to the *next power-of-two* multiple
+      of (H,W), then antialiased bilinear-resizes to (H_out, W_out) if needed.
     """
     def __init__(self, c_in: int, H: int, W: int, H_out: int, W_out: int,
                  base: int = 256, dropout: float = 0.05):
         super().__init__()
-        assert (H_out % H == 0) and (W_out % W == 0), "Output must be integer multiple of token grid"
+        assert (H_out % H == 0) and (W_out % W == 0), "Output must be an integer multiple of token grid"
         sx = H_out // H
         sy = W_out // W
         assert sx == sy, f"Non-uniform scale not supported (sx={sx}, sy={sy})"
-        n_ups = int(math.log2(sx))
-        assert 2 ** n_ups == sx, f"Scale {sx} must be power of two"
+        self.H_out, self.W_out = H_out, W_out
 
+        # 1) Stem at token resolution
         self.stem = nn.Sequential(
             nn.Conv2d(c_in, base, 1),
             nn.GELU(),
             nn.Dropout2d(dropout),
             UpBlock(base, base),
         )
+
+        # 2) Decide how far the deconv pyramid goes (power of two)
+        sx_p2 = sx if _is_pow2(sx) else _next_pow2(sx)  # e.g., 14 -> 16
+        self.mid_scale = sx_p2
+        n_ups = int(math.log2(sx_p2))
         ups, blks = [], []
         c = base
         for _ in range(n_ups):
@@ -220,13 +237,24 @@ class GenericDenseDecoder(nn.Module):
             c //= 2
         self.ups = nn.ModuleList(ups)
         self.blks = nn.ModuleList(blks)
-        self.head = nn.Conv2d(c, 1, 1)
+
+        # 3) Head at the mid (power-of-two) resolution
+        self.head_mid = nn.Conv2d(c, 1, 1)
+
+        # 4) If sx wasn't a power of two, we'll downsample to the exact target
+        self.need_final_resize = (sx_p2 != sx)
 
     def forward(self, x):
         x = self.stem(x)
         for up, blk in zip(self.ups, self.blks):
             x = blk(up(x))
-        return self.head(x)
+        x = self.head_mid(x)  # [B,1,H*2^n, W*2^n]
+
+        if self.need_final_resize:
+            # Antialiased downsample to the exact requested size (e.g., 256 -> 224)
+            x = F.interpolate(x, size=(self.H_out, self.W_out),
+                              mode='bilinear', align_corners=False, antialias=True)
+        return x
 
 # ---------------------------
 # Train / Eval (50 epochs, best-epoch RMSE)
