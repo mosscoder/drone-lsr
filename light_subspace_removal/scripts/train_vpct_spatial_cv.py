@@ -114,8 +114,8 @@ def apply_projection_np(X_patch: np.ndarray, Q: torch.Tensor | None):
 # ---------------------------
 def load_all_times_from_hf(model_config: str, H_out: int, W_out: int):
     """Return arrays containing ALL timepoints for every tile."""
-    ds_embed = load_dataset("mpg-ranch/light-stable-semantics", model_config, split='train')
-    ds_default = load_dataset("mpg-ranch/light-stable-semantics", "default", split='train')
+    ds_embed = load_dataset("mpg-ranch/drone-lsr", model_config, split='train')
+    ds_default = load_dataset("mpg-ranch/drone-lsr", "default", split='train')
     canopy_map = {ex['idx']: ex['canopy_height'] for ex in ds_default}
 
     X_all, ids_all, Y_all = [], [], []

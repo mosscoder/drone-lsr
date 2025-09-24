@@ -13,7 +13,7 @@ using variance thresholds of 0%, 50%, and 100%. False color composites map the t
 PCA components to RGB channels for visualization.
 
 Embeddings source:
-  load_dataset("mpg-ranch/light-stable-semantics", {model_config}, split="train")
+  load_dataset("mpg-ranch/drone-lsr", {model_config}, split="train")
 
 RGB source:
   - Tries to read from the "default" HF config using common key patterns
@@ -230,7 +230,7 @@ def make_false_color_composite(Xt_proj: np.ndarray, H: int, W: int, target_heigh
 
 def load_embeddings(model_config: str):
     """Return (tile_ids list, dict tile_id -> {'t0','t1','t2': np.ndarray[Np,D]})"""
-    ds = load_dataset("mpg-ranch/light-stable-semantics", model_config, split="train")
+    ds = load_dataset("mpg-ranch/drone-lsr", model_config, split="train")
     tiles, X_by_tile = [], {}
     for ex in ds:
         tid = ex["idx"]
@@ -243,7 +243,7 @@ def load_embeddings(model_config: str):
     return tiles, X_by_tile
 
 def resolve_tile_id_from_row(model_config: str, row_index: int) -> str:
-    ds = load_dataset("mpg-ranch/light-stable-semantics", model_config, split="train")
+    ds = load_dataset("mpg-ranch/drone-lsr", model_config, split="train")
     if not (0 <= row_index < len(ds)):
         raise IndexError(f"--row_index {row_index} out of range [0, {len(ds)-1}]")
     return ds[row_index]["idx"]
@@ -260,7 +260,7 @@ def load_rgb_triplet(tile_id: str, rgb_template: str | None):
         return frames
 
     # Try HF default config with common key patterns
-    ds_def = load_dataset("mpg-ranch/light-stable-semantics", "default", split="train")
+    ds_def = load_dataset("mpg-ranch/drone-lsr", "default", split="train")
     by_id = {ex["idx"]: ex for ex in ds_def}
     if tile_id not in by_id:
         raise KeyError(f"Tile {tile_id} not found in default config")

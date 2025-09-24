@@ -240,8 +240,8 @@ def main():
 
     # 1) Load datasets - both embedding config and default config for RGB
     print(f"Loading model config: {args.model_config}")
-    ds_embed = load_dataset("mpg-ranch/light-stable-semantics", args.model_config)
-    ds_default = load_dataset("mpg-ranch/light-stable-semantics", "default")
+    ds_embed = load_dataset("mpg-ranch/drone-lsr", args.model_config)
+    ds_default = load_dataset("mpg-ranch/drone-lsr", "default")
 
     ds_embed_train = ds_embed["train"]
     ds_default_train = ds_default["train"]

@@ -10,19 +10,19 @@ tags:
 - aerial-imagery
 - orthomosaic
 - lighting-invariance
-- semantic-stability
+- representation-stability
 - vision-encoder
 - time-series
 - dinov2
 - dinov3
 - embeddings
 - multi-config
-pretty_name: Light Stable Semantics
+pretty_name: Light Stable Representations
 size_categories:
 - n<1K
 ---
 
-# Light Stable Semantics Dataset
+# Light Stable Representations Dataset
 
 ## Dataset Description
 
@@ -80,9 +80,9 @@ Pre-computed DINOv3 Large (ViT-L/16) embeddings with satellite pretraining:
 from datasets import load_dataset
 
 # Load specific configurations
-dataset_default = load_dataset("mpg-ranch/light-stable-semantics", "default")
-dataset_dinov2 = load_dataset("mpg-ranch/light-stable-semantics", "dinov2_base")
-dataset_dinov3 = load_dataset("mpg-ranch/light-stable-semantics", "dinov3_sat")
+dataset_default = load_dataset("mpg-ranch/drone-lsr", "default")
+dataset_dinov2 = load_dataset("mpg-ranch/drone-lsr", "dinov2_base")
+dataset_dinov3 = load_dataset("mpg-ranch/drone-lsr", "dinov3_sat")
 
 # Access raw imagery and canopy height
 sample_default = dataset_default['train'][0]
@@ -117,13 +117,13 @@ The dataset includes pre-computed embeddings from two state-of-the-art vision tr
 
 ### DINOv2 Base (`facebook/dinov2-base`)
 - **Architecture**: Vision Transformer Base with 14×14 patch size
-- **CLS Tokens**: 768-dimensional global feature vectors capturing scene-level semantics
+- **CLS Tokens**: 768-dimensional global feature vectors capturing scene-level representations
 - **Patch Tokens**: 256×768 arrays (16×16 spatial grid) encoding local features
 - **Training**: Self-supervised learning on natural images
 
 ### DINOv3 Large (`facebook/dinov3-vitl16-pretrain-sat493m`)
 - **Architecture**: Vision Transformer Large with 16×16 patch size
-- **CLS Tokens**: 1024-dimensional global feature vectors capturing scene-level semantics
+- **CLS Tokens**: 1024-dimensional global feature vectors capturing scene-level representations
 - **Patch Tokens**: 196×1024 arrays (14×14 spatial grid) encoding local features
 - **Training**: Self-supervised learning with satellite imagery pretraining
 
@@ -142,7 +142,7 @@ The dataset includes pre-computed embeddings from two state-of-the-art vision tr
 
 This dataset is intended for:
 - Developing vision encoders robust to lighting variations
-- Semantic stability research in computer vision
+- Representation stability research in computer vision
 - Time-invariant feature learning
 - Remote sensing applications requiring lighting robustness
 - Comparative analysis of illumination effects on vision model features
@@ -153,13 +153,13 @@ If you use this dataset in your research, please cite:
 
 ```bibtex
 @dataset{mpg_ranch_light_stable_semantics_2024,
-  title={Light Stable Semantics Dataset},
+  title={Light Stable Representations Dataset},
   author={Kyle Doherty and Erik Samose and Max Gurinas and Brandon Trabucco and Ruslan Salakhutdinov},
   year={2024},
   month={November},
-  url={https://huggingface.co/datasets/mpg-ranch/light-stable-semantics},
+  url={https://huggingface.co/datasets/mpg-ranch/drone-lsr},
   publisher={Hugging Face},
-  note={Aerial orthomosaic tiles with DINOv2 and DINOv3 embeddings for light-stable semantic vision encoder training},
+  note={Aerial orthomosaic tiles with DINOv2 and DINOv3 embeddings for light-stable representation vision encoder training},
   location={MPG Ranch, Montana, USA},
   survey_date={2024-11-07},
   organization={MPG Ranch}

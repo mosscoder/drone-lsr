@@ -183,7 +183,7 @@ def main():
     output_path = processed_dir / "tile_grid.png"
 
     print("Loading dataset from HuggingFace...")
-    dataset = load_dataset("mpg-ranch/light-stable-semantics", "default", split="train")
+    dataset = load_dataset("mpg-ranch/drone-lsr", "default", split="train")
 
     print(f"Getting specific tiles: {tile_ids}")
     sampled_tiles = get_specific_tiles(dataset, tile_ids=tile_ids)

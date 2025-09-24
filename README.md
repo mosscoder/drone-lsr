@@ -1,4 +1,4 @@
-# Light Stable Semantics Dataset
+# Light Stable Representations Dataset
 
 <div align="center">
 <img src="figures/example_scene.gif" alt="Example Scene" width="50%">
@@ -6,7 +6,7 @@
 
 ## Project Goals
 
-This project aims to develop vision encoders that maintain semantic stability under varying lighting conditions by creating a specialized dataset from drone orthomosaics captured at three different times of day (10:00, 12:00, and 15:00) over the same geographic area at MPG Ranch, Montana, USA. By analyzing how vision model features change across these time points while the underlying scene semantics remain constant, we can identify which features are most sensitive to illumination changes versus those that capture lighting-invariant semantic information. The dataset enables researchers to train and evaluate computer vision models for improved robustness to natural lighting variations, ultimately advancing applications in remote sensing, environmental monitoring, and autonomous navigation where consistent scene understanding across different lighting conditions is critical.
+This project aims to develop vision encoders that maintain representational stability under varying lighting conditions by creating a specialized dataset from drone orthomosaics captured at three different times of day (10:00, 12:00, and 15:00) over the same geographic area at MPG Ranch, Montana, USA. By analyzing how vision model features change across these time points while the underlying scene representations remain constant, we can identify which features are most sensitive to illumination changes versus those that capture lighting-invariant representational information. The dataset enables researchers to train and evaluate computer vision models for improved robustness to natural lighting variations, ultimately advancing applications in remote sensing, environmental monitoring, and autonomous navigation where consistent scene understanding across different lighting conditions is critical.
 
 ## Dataset Structure
 
@@ -22,13 +22,13 @@ Raw imagery and environmental data for direct analysis:
 
 ### Configuration 2: `dinov2_base`
 Pre-computed DINOv2 Base (ViT-B/14) embeddings:
-- **Global Features**: CLS tokens (768-dim vectors) capturing scene-level semantics
+- **Global Features**: CLS tokens (768-dim vectors) capturing scene-level representations
 - **Spatial Features**: Patch tokens (256×768 arrays) from 16×16 spatial grid
 - **Identifiers**: Matching tile IDs for cross-reference with other configs
 
 ### Configuration 3: `dinov3_sat`
 Pre-computed DINOv3 Large (ViT-L/16) embeddings with satellite pretraining:
-- **Global Features**: CLS tokens (1024-dim vectors) capturing scene-level semantics
+- **Global Features**: CLS tokens (1024-dim vectors) capturing scene-level representations
 - **Spatial Features**: Patch tokens (196×1024 arrays) from 14×14 spatial grid
 - **Identifiers**: Matching tile IDs for cross-reference with other configs
 
@@ -37,12 +37,12 @@ Pre-computed DINOv3 Large (ViT-L/16) embeddings with satellite pretraining:
 from datasets import load_dataset
 
 # Load specific configurations
-dataset_default = load_dataset("mpg-ranch/light-stable-semantics", "default")
-dataset_dinov2 = load_dataset("mpg-ranch/light-stable-semantics", "dinov2_base")
-dataset_dinov3 = load_dataset("mpg-ranch/light-stable-semantics", "dinov3_sat")
+dataset_default = load_dataset("mpg-ranch/drone-lsr", "default")
+dataset_dinov2 = load_dataset("mpg-ranch/drone-lsr", "dinov2_base")
+dataset_dinov3 = load_dataset("mpg-ranch/drone-lsr", "dinov3_sat")
 ```
 
-The data is available on Hugging Face Hub at [mpg-ranch/light-stable-semantics](https://huggingface.co/datasets/mpg-ranch/light-stable-semantics).
+The data is available on Hugging Face Hub at [mpg-ranch/drone-lsr](https://huggingface.co/datasets/mpg-ranch/drone-lsr).
 
 ## Processing Pipeline
 
@@ -53,7 +53,7 @@ The dataset creation follows a rigorous preprocessing pipeline:
 3. **02_push_docs_to_hf.py**: Uploads documentation and metadata to Hugging Face Hub
 4. **03_push_imgs_hf.py**: Quantises canopy height to centimeters, extracts DINOv2 and DINOv3 embeddings, performs consistent 80/20 train/test splits, and uploads all three dataset configurations
 
-This pipeline ensures high-quality, semantically consistent tiles suitable for training lighting-robust vision models.
+This pipeline ensures high-quality, representationally consistent tiles suitable for training lighting-robust vision models.
 
 ## Repository Contents
 

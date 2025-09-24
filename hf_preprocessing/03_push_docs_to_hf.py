@@ -8,7 +8,7 @@ from huggingface_hub import HfApi, metadata_update
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 hf_org = 'mpg-ranch'
-hf_repo = 'light-stable-semantics'
+hf_repo = 'drone-lsr'
 
 def extract_yaml_metadata(readme_path):
     """Extract YAML metadata from README.md file."""

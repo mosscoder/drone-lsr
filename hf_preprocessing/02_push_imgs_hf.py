@@ -25,7 +25,7 @@ from transformers import AutoModel, AutoImageProcessor
 # Config
 # -------------------------
 hf_org = 'mpg-ranch'
-hf_repo = 'light-stable-semantics'
+hf_repo = 'drone-lsr'
 RGB_TILE_DIR = Path('data/raster/tiles/rgb')
 CANOPY_TILE_DIR = Path('data/raster/tiles/chm')
 TARGET_SHARD_SIZE_MB = 500
