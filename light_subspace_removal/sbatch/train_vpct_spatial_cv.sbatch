@@ -9,7 +9,7 @@
 #SBATCH --output=/home/kdoherty/logs/light_subspace_removal/%x_%A_%a.out
 #SBATCH --error=/home/kdoherty/logs/light_subspace_removal/%x_%A_%a.err
 
-cd /home/kdoherty/drone-lsr
+cd /home/kdoherty/drone_lsr
 
 # Env
 source ~/.bashrc

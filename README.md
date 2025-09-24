@@ -1,7 +1,7 @@
 # Light Stable Representations Dataset
 
 <div align="center">
-<img src="figures/example_scene.gif" alt="Example Scene" width="50%">
+<img src="supporting/processed/example_scene.gif" alt="Example Scene" width="50%">
 </div>
 
 ## Project Goals
@@ -54,9 +54,3 @@ The dataset creation follows a rigorous preprocessing pipeline:
 4. **03_push_imgs_hf.py**: Quantises canopy height to centimeters, extracts DINOv2 and DINOv3 embeddings, performs consistent 80/20 train/test splits, and uploads all three dataset configurations
 
 This pipeline ensures high-quality, representationally consistent tiles suitable for training lighting-robust vision models.
-
-## Repository Contents
-
-- `hf_preprocessing/`: Complete processing pipeline from orthomosaics to Hugging Face dataset
-- `experiments/`: Analysis scripts for evaluating lighting stability in vision features  
-- `data/`: Local storage for processed tiles, exclusion lists, and intermediate outputs

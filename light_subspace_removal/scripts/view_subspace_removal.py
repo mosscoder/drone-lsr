@@ -5,27 +5,27 @@ Visualize a single tile across time with shadow-subspace removal + local PCA.
 Layout (3 rows × 4 columns):
   - Column 1: RGB at t0, t1, t2 (rows: t0→t2)
   - Column 2: False color composite after 0% variance removal
-  - Column 3: False color composite after 50% variance removal
+  - Column 3: False color composite after 90% variance removal
   - Column 4: False color composite after 100% variance removal
 
-Shadow/lighting basis (Q) is fit on TRAIN tiles only for the chosen spatial fold (T=3),
-using variance thresholds of 0%, 50%, and 100%. False color composites map the top 3
-PCA components to RGB channels for visualization.
+Shadow/lighting basis (Q) is fit on ALL tiles (no fold-based splitting),
+using variance thresholds of 0%, 90%, and 100%. False color composites map the top 3
+PCA components directly to RGB channels for visualization.
+
+Processes both models (dinov2_base, dinov3_sat) automatically, generating separate outputs.
 
 Embeddings source:
   load_dataset("mpg-ranch/drone-lsr", {model_config}, split="train")
 
 RGB source:
   - Tries to read from the "default" HF config using common key patterns
-  - Or pass --rgb_template like "/path/to/rgb/{tile_id}_{time}.png" with time in {t0,t1,t2}
-
-You can select the tile either by --tile_id or by --row_index into the HF split (row_index overrides).
+  - Or pass --rgb_template like "/path/to/rgb/{tile_idx}_{time}.png" with time in {t0,t1,t2}
 
 Example:
-  python view_subspace_removal.py \
-    --model_config dinov3_sat --spatial_fold 0 \
-    --row_index 137 \
-    --out_png results/light_subspace_removal/viz/row137_fold0_false_color.png
+  python view_subspace_removal.py --tile_idx "137_45"
+    # Outputs auto-generated as:
+    # supporting/processed/dinov2_base_subspace_removal.png
+    # supporting/processed/dinov3_sat_subspace_removal.png
 """
 
 import argparse, os
@@ -38,7 +38,6 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 from sklearn.decomposition import PCA
 from datasets import load_dataset
-from sklearn.model_selection import KFold
 from PIL import Image
 from scipy.linalg import orthogonal_procrustes
 
@@ -182,44 +181,39 @@ def make_false_color_composite(Xt_proj: np.ndarray, H: int, W: int, target_heigh
     for t in range(3):
         pc_scores = scores[t*Np:(t+1)*Np, :].reshape(H, W, 3)  # [H, W, 3]
 
-        # Create HSV image: PC1→Hue, PC2→Saturation, PC3→Value
-        hsv_img = np.zeros((H, W, 3), dtype=np.float32)
+        # Create RGB image: PC1→Red, PC2→Green, PC3→Blue
+        rgb_img = np.zeros((H, W, 3), dtype=np.uint8)
 
-        # PC1 → Hue (0-360°, but PIL uses 0-179 for H)
-        hue_channel = pc_scores[:, :, 0]
-        h_low, h_high = np.nanpercentile(hue_channel, [1, 99])
-        if h_high > h_low:
-            hue_norm = np.clip((hue_channel - h_low) / (h_high - h_low), 0, 1)
+        # PC1 → Red channel
+        red_channel = pc_scores[:, :, 0]
+        r_low, r_high = np.nanpercentile(red_channel, [1, 99])
+        if r_high > r_low:
+            red_norm = np.clip((red_channel - r_low) / (r_high - r_low), 0, 1)
         else:
-            hue_norm = np.zeros_like(hue_channel)
-        hsv_img[:, :, 0] = hue_norm * 179  # Scale to PIL's hue range [0, 179]
+            red_norm = np.zeros_like(red_channel)
+        rgb_img[:, :, 0] = (red_norm * 255).astype(np.uint8)
 
-        # PC2 → Saturation (0-1)
-        sat_channel = pc_scores[:, :, 1]
-        s_low, s_high = np.nanpercentile(sat_channel, [1, 99])
-        if s_high > s_low:
-            sat_norm = np.clip((sat_channel - s_low) / (s_high - s_low), 0, 1)
+        # PC2 → Green channel
+        green_channel = pc_scores[:, :, 1]
+        g_low, g_high = np.nanpercentile(green_channel, [1, 99])
+        if g_high > g_low:
+            green_norm = np.clip((green_channel - g_low) / (g_high - g_low), 0, 1)
         else:
-            sat_norm = np.zeros_like(sat_channel)
-        hsv_img[:, :, 1] = sat_norm * 255  # Scale to [0, 255] for PIL
+            green_norm = np.zeros_like(green_channel)
+        rgb_img[:, :, 1] = (green_norm * 255).astype(np.uint8)
 
-        # PC3 → Value/Brightness (0-1)
-        val_channel = pc_scores[:, :, 2]
-        v_low, v_high = np.nanpercentile(val_channel, [1, 99])
-        if v_high > v_low:
-            val_norm = np.clip((val_channel - v_low) / (v_high - v_low), 0, 1)
+        # PC3 → Blue channel
+        blue_channel = pc_scores[:, :, 2]
+        b_low, b_high = np.nanpercentile(blue_channel, [1, 99])
+        if b_high > b_low:
+            blue_norm = np.clip((blue_channel - b_low) / (b_high - b_low), 0, 1)
         else:
-            val_norm = np.zeros_like(val_channel)
-        hsv_img[:, :, 2] = val_norm * 255  # Scale to [0, 255] for PIL
-
-        # Convert HSV to RGB
-        hsv_img_uint8 = hsv_img.astype(np.uint8)
-        hsv_pil = Image.fromarray(hsv_img_uint8, mode='HSV')
-        rgb_img = np.array(hsv_pil.convert('RGB'))
+            blue_norm = np.zeros_like(blue_channel)
+        rgb_img[:, :, 2] = (blue_norm * 255).astype(np.uint8)
 
         # Upsample to target resolution using PIL
         if (H, W) != (target_height, target_width):
-            pil_img = Image.fromarray(rgb_img)
+            pil_img = Image.fromarray(rgb_img, mode='RGB')
             rgb_img_upsampled = np.array(pil_img.resize((target_width, target_height), Image.LANCZOS))
         else:
             rgb_img_upsampled = rgb_img
@@ -229,7 +223,7 @@ def make_false_color_composite(Xt_proj: np.ndarray, H: int, W: int, target_heigh
     return np.stack(false_colors, 0), pca  # [3, target_H, target_W, 3]
 
 def load_embeddings(model_config: str):
-    """Return (tile_ids list, dict tile_id -> {'t0','t1','t2': np.ndarray[Np,D]})"""
+    """Return (tile_idxs list, dict tile_idx -> {'t0','t1','t2': np.ndarray[Np,D]})"""
     ds = load_dataset("mpg-ranch/drone-lsr", model_config, split="train")
     tiles, X_by_tile = [], {}
     for ex in ds:
@@ -242,18 +236,13 @@ def load_embeddings(model_config: str):
         tiles.append(tid)
     return tiles, X_by_tile
 
-def resolve_tile_id_from_row(model_config: str, row_index: int) -> str:
-    ds = load_dataset("mpg-ranch/drone-lsr", model_config, split="train")
-    if not (0 <= row_index < len(ds)):
-        raise IndexError(f"--row_index {row_index} out of range [0, {len(ds)-1}]")
-    return ds[row_index]["idx"]
 
-def load_rgb_triplet(tile_id: str, rgb_template: str | None):
+def load_rgb_triplet(tile_idx: str, rgb_template: str | None):
     # Try user template first
     if rgb_template:
         frames = []
         for tk in ("t0","t1","t2"):
-            p = Path(rgb_template.format(tile_id=tile_id, time=tk))
+            p = Path(rgb_template.format(tile_idx=tile_idx, time=tk))
             if not p.exists():
                 raise FileNotFoundError(f"RGB template path not found: {p}")
             frames.append(Image.open(p).convert("RGB"))
@@ -262,9 +251,9 @@ def load_rgb_triplet(tile_id: str, rgb_template: str | None):
     # Try HF default config with common key patterns
     ds_def = load_dataset("mpg-ranch/drone-lsr", "default", split="train")
     by_id = {ex["idx"]: ex for ex in ds_def}
-    if tile_id not in by_id:
-        raise KeyError(f"Tile {tile_id} not found in default config")
-    ex = by_id[tile_id]
+    if tile_idx not in by_id:
+        raise KeyError(f"Tile {tile_idx} not found in default config")
+    ex = by_id[tile_idx]
     candidates = [
         ("rgb_t0","rgb_t1","rgb_t2"),
         ("image_t0","image_t1","image_t2"),
@@ -275,63 +264,35 @@ def load_rgb_triplet(tile_id: str, rgb_template: str | None):
             def to_img(x):
                 return x if isinstance(x, Image.Image) else Image.fromarray(np.array(x))
             return [to_img(ex[t0k]).convert("RGB"), to_img(ex[t1k]).convert("RGB"), to_img(ex[t2k]).convert("RGB")]
-    raise KeyError(f"No RGB keys found for tile {tile_id}. Provide --rgb_template.")
+    raise KeyError(f"No RGB keys found for tile {tile_idx}. Provide --rgb_template.")
 
-def build_folds(all_tile_ids, seed=42):
-    tiles = sorted(set(all_tile_ids))
-    kf = KFold(n_splits=5, shuffle=True, random_state=seed)
-    return tiles, list(kf.split(tiles))
 
-def tile_rows_for_ids(X_by_tile, tile_ids):
+def tile_rows_for_idxs(X_by_tile, tile_idxs):
     rows, ids = [], []
-    for tid in tile_ids:
+    for tidx in tile_idxs:
         for tk in ("t0","t1","t2"):
-            rows.append(X_by_tile[tid][tk])
-            ids.append(tid)
+            rows.append(X_by_tile[tidx][tk])
+            ids.append(tidx)
     return np.stack(rows, 0), ids  # [3*Nt, Np, D]
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--model_config", type=str, required=True, choices=["dinov2_base","dinov3_sat"])
-    ap.add_argument("--spatial_fold", type=int, required=True, help="fold in [0..4]")
-    ap.add_argument("--tile_id", type=str, default=None, help="Tile identifier (overridden by --row_index if set)")
-    ap.add_argument("--row_index", type=int, default=None, help="Index into HF dataset split='train' (overrides --tile_id)")
-    ap.add_argument("--rgb_template", type=str, default=None,
-                    help="e.g., '/data/rgb/{tile_id}_{time}.png' with time in {t0,t1,t2}'")
-    ap.add_argument("--out_png", type=str, required=True)
-    ap.add_argument("--seed", type=int, default=42)
-    args = ap.parse_args()
+def process_model(model_config: str, tile_idx: str, rgb_template: str | None, seed: int = 42):
+    """Process a single model and generate visualization."""
+    print(f"[info] Processing model: {model_config}")
 
-    set_seed(args.seed)
-
-    # Resolve tile_id by row_index if provided
-    if args.row_index is not None:
-        resolved = resolve_tile_id_from_row(args.model_config, args.row_index)
-        print(f"[info] Resolved tile_id from row_index={args.row_index} -> '{resolved}'")
-        args.tile_id = resolved
-    if not args.tile_id:
-        raise ValueError("Provide either --tile_id or --row_index")
-
-    # Load embeddings for all tiles (needed to fit Q on train-only)
-    all_tiles, X_by_tile = load_embeddings(args.model_config)
-    if args.tile_id not in X_by_tile:
-        raise KeyError(f"Tile '{args.tile_id}' not found in embeddings")
+    # Load embeddings for all tiles
+    all_tiles, X_by_tile = load_embeddings(model_config)
+    if tile_idx not in X_by_tile:
+        raise KeyError(f"Tile '{tile_idx}' not found in embeddings for {model_config}")
 
     # Shape info
-    sample = X_by_tile[args.tile_id]["t0"]
+    sample = X_by_tile[tile_idx]["t0"]
     H, W, D = infer_token_grid(np.stack([sample], 0))
     Np = H * W
 
-    # Spatial folds by tile-id; get TRAIN tiles for the requested fold
-    tiles, folds = build_folds(all_tiles, seed=args.seed)
-    assert 0 <= args.spatial_fold < 5
-    tr_idx, va_idx = folds[args.spatial_fold]
-    tr_tiles = [tiles[i] for i in tr_idx]
-    va_tiles = [tiles[i] for i in va_idx]
-
-    # Fit Q matrices for 0%, 50%, 100% variance removal
-    Xtr, id_tr = tile_rows_for_ids(X_by_tile, tr_tiles)  # [3*Nt, Np, D]
-    var_levels = [0.0, 50.0, 100.0]
+    # Use ALL tiles for fitting Q matrices (no fold-based splitting)
+    # Fit Q matrices for 0%, 90%, 100% variance removal
+    Xtr, id_tr = tile_rows_for_idxs(X_by_tile, all_tiles)  # [3*Nt, Np, D]
+    var_levels = [0.0, 90.0, 100.0]
     Q_matrices = []
     k_values = []
 
@@ -340,13 +301,13 @@ def main():
         Q_matrices.append(Q)
         k_values.append(k_chosen)
         if Q is None:
-            print(f"[info] var_pct={var_pct}% → k=0 (no removal)")
+            print(f"[info] {model_config} var_pct={var_pct}% → k=0 (no removal)")
         else:
             cumk = (cum[k_chosen-1] if len(cum) >= k_chosen and k_chosen > 0 else 0.0)
-            print(f"[info] var_pct={var_pct}% → k={k_chosen}, cumEVR≈{cumk:.3f}")
+            print(f"[info] {model_config} var_pct={var_pct}% → k={k_chosen}, cumEVR≈{cumk:.3f}")
 
     # Pull this tile's 3 timepoints
-    Xt_tile = np.stack([X_by_tile[args.tile_id][tk] for tk in ("t0","t1","t2")], 0)  # [3, Np, D]
+    Xt_tile = np.stack([X_by_tile[tile_idx][tk] for tk in ("t0","t1","t2")], 0)  # [3, Np, D]
 
     # Generate false color composites for each variance level
     false_color_imgs = []
@@ -359,22 +320,22 @@ def main():
             # First level (0%) - establish reference
             fc_rgb, reference_pca = make_false_color_composite(
                 Xt_proj, H, W, target_height=1024, target_width=1024,
-                seed=args.seed, reference_pca=None)
+                seed=seed, reference_pca=None)
         else:
-            # Subsequent levels (50%, 100%) - align to reference
+            # Subsequent levels (90%, 100%) - align to reference
             fc_rgb, _ = make_false_color_composite(
                 Xt_proj, H, W, target_height=1024, target_width=1024,
-                seed=args.seed, reference_pca=reference_pca)
+                seed=seed, reference_pca=reference_pca)
 
         false_color_imgs.append(fc_rgb)
 
     # Load RGB triplet
-    rgb_imgs = load_rgb_triplet(args.tile_id, args.rgb_template)  # list[PIL] length 3
+    rgb_imgs = load_rgb_triplet(tile_idx, rgb_template)  # list[PIL] length 3
 
-    # === Plot 3x4 grid: rows t0,t1,t2; col1 RGB, col2-4 false color at 0%,50%,100% ===
+    # === Plot 3x4 grid: rows t0,t1,t2; col1 RGB, col2-4 false color at 0%,90%,100% ===
     fig, axes = plt.subplots(3, 4, figsize=(16, 12))
     times = ["t0","t1","t2"]
-    col_headers = ["RGB", "0%", "50%", "100%"]
+    col_headers = ["RGB", "0%", "90%", "100%"]
 
     # Add column headers at the top
     for c, header in enumerate(col_headers):
@@ -391,20 +352,45 @@ def main():
         ax.text(-0.1, 0.5, times[r], transform=ax.transAxes,
                ha='right', va='center', fontsize=12, rotation=90)
 
-        # Columns 2-4: False color composites for 0%, 50%, 100%
+        # Columns 2-4: False color composites for 0%, 90%, 100%
         for c in range(1, 4):
-            var_idx = c - 1  # 0, 1, 2 for 0%, 50%, 100%
+            var_idx = c - 1  # 0, 1, 2 for 0%, 90%, 100%
             ax = axes[r, c]
             ax.imshow(false_color_imgs[var_idx][r])  # [time_idx][H, W, 3]
             ax.set_axis_off()
 
     plt.tight_layout()
 
-    out = Path(args.out_png)
+    # Auto-generate output path
+    out_path = f"supporting/processed/{model_config}_subspace_removal.png"
+    out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(out, dpi=300)
     plt.close()
     print(f"Saved {out}")
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--tile_idx", type=str, required=True, help="Tile identifier")
+    ap.add_argument("--rgb_template", type=str, default=None,
+                    help="e.g., '/data/rgb/{tile_idx}_{time}.png' with time in {t0,t1,t2}'")
+    ap.add_argument("--seed", type=int, default=42)
+    args = ap.parse_args()
+
+    set_seed(args.seed)
+
+    # Validate tile_idx is provided
+    if not args.tile_idx:
+        raise ValueError("Provide --tile_idx")
+
+    # Process both models
+    models = ["dinov2_base", "dinov3_sat"]
+    for model_config in models:
+        try:
+            process_model(model_config, args.tile_idx, args.rgb_template, args.seed)
+        except Exception as e:
+            print(f"[error] Failed to process {model_config}: {e}")
+            continue
 
 if __name__ == "__main__":
     main()

@@ -7,7 +7,7 @@ Spatial-only 5-fold CV:
 - Val  : held-out ~20% tiles, all timepoints (t0,t1,t2)
 
 Lighting subspace removal by TARGET VARIANCE EXPLAINED:
-- --var_pct in {0,5,10,25,50,100}
+- --var_pct in range(0, 110, 10)
 - Chooses minimal k with cumulative EVR >= var_pct/100 on TRAIN-ONLY residuals
   (per-patch, per-tile residuals z_{i,p,t} - mean_t z_{i,p,·}, T=3).
 
