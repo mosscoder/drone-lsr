@@ -119,7 +119,7 @@ def compute_cv_metrics(fold_results):
 # --------------------------
 def create_comparison_plot(dinov2_results, dinov3_results, output_path):
     """
-    Side-by-side comparison of DINOv2 vs DINOv3 across % variance removed.
+    Combined comparison of DINOv2 vs DINOv3 across % variance removed.
     X-axis: percent variance removed (0..100).
     """
     v2_keys = set(dinov2_results.keys()) if dinov2_results else set()
@@ -145,40 +145,50 @@ def create_comparison_plot(dinov2_results, dinov3_results, output_path):
     v2_mean, v2_low, v2_up = collect(dinov2_results)
     v3_mean, v3_low, v3_up = collect(dinov3_results)
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6), sharey=True)
+    fig, ax = plt.subplots(1, 1, figsize=(10, 6))
 
-    # DINOv2
+    # DINOv2 - Python blue (C0)
     mask2 = ~np.isnan(v2_mean)
     if np.any(mask2):
-        ax1.plot(vps[mask2], v2_mean[mask2], linewidth=2, marker='o')
-        ax1.fill_between(vps[mask2], v2_low[mask2], v2_up[mask2], alpha=0.25)
-    ax1.set_title('DINOv2 Base (ViT-B/14)', fontsize=14)
-    ax1.set_xlabel('% variance removed')
-    ax1.set_ylabel('RMSE (cm)')
-    ax1.grid(True, alpha=0.3)
-    ax1.set_xlim(-2, 102)
+        ax.plot(vps[mask2], v2_mean[mask2], color='C0', linewidth=2, marker='o',
+                label='DINOv2-base')
+        ax.fill_between(vps[mask2], v2_low[mask2], v2_up[mask2], color='C0', alpha=0.25)
 
-    # DINOv3
+    # DINOv3 - Python orange (C1)
     mask3 = ~np.isnan(v3_mean)
     if np.any(mask3):
-        ax2.plot(vps[mask3], v3_mean[mask3], linewidth=2, marker='o')
-        ax2.fill_between(vps[mask3], v3_low[mask3], v3_up[mask3], alpha=0.25)
-    ax2.set_title('DINOv3 Large + SAT (ViT-L/16)', fontsize=14)
-    ax2.set_xlabel('% variance removed')
-    ax2.grid(True, alpha=0.3)
-    ax2.set_xlim(-2, 102)
+        ax.plot(vps[mask3], v3_mean[mask3], color='C1', linewidth=2, marker='o',
+                label='DINOv3-sat')
+        ax.fill_between(vps[mask3], v3_low[mask3], v3_up[mask3], color='C1', alpha=0.25)
 
-    # Match y-lims (if both have data)
-    if np.any(mask2) and np.any(mask3):
-        y_min = np.nanmin([v2_low[mask2], v3_low[mask3]])
-        y_max = np.nanmax([v2_up[mask2],  v3_up[mask3]])
+    ax.set_xlabel('Lighting subspace variance removed (%)')
+    ax.set_ylabel('RMSE (cm)')
+    ax.grid(True, alpha=0.3)
+    ax.set_xlim(-2, 102)
+
+    # Set y-limits based on available data
+    if np.any(mask2) or np.any(mask3):
+        all_lows = []
+        all_ups = []
+        if np.any(mask2):
+            all_lows.extend(v2_low[mask2])
+            all_ups.extend(v2_up[mask2])
+        if np.any(mask3):
+            all_lows.extend(v3_low[mask3])
+            all_ups.extend(v3_up[mask3])
+
+        y_min = np.nanmin(all_lows)
+        y_max = np.nanmax(all_ups)
         pad = 0.05 * (y_max - y_min) if y_max > y_min else 0.1
-        ax1.set_ylim(y_min - pad, y_max + pad)
-        ax2.set_ylim(y_min - pad, y_max + pad)
+        ax.set_ylim(y_min - pad, y_max + pad)
 
-    # Super title (no decoder name)
-    plt.suptitle('Canopy Height Prediction: Effect of Lighting Subspace Removal',
-                 fontsize=16, y=0.98)
+    # Legend in lower left with Model title
+    legend = ax.legend(title='Model', loc='lower left', framealpha=0.9)
+    legend.get_title().set_fontweight('bold')
+
+    # Main title
+    plt.title('Canopy Height Prediction: Effect of Lighting Subspace Removal',
+              fontsize=14, pad=20)
     plt.tight_layout()
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
