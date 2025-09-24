@@ -225,7 +225,7 @@ def main():
 
     ap.add_argument("--job_id", type=int, default=None)
     ap.add_argument("--total_jobs", type=int, default=8)
-    ap.add_argument("--total_configs", type=int, default=60)  # 6 var levels × 5 folds × 2 configs
+    ap.add_argument("--total_configs", type=int, default=110)  # 11 var levels × 5 folds × 2 configs
 
     ap.add_argument("--outdir", type=str, default="results/light_subspace_removal")
     ap.add_argument("--seed", type=int, default=42)
@@ -240,7 +240,7 @@ def main():
     set_seed(args.seed)
 
     if args.job_id is not None:
-        VAR_PCTS = [0, 5, 10, 25, 50, 100]
+        VAR_PCTS = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
         FOLDS = [0,1,2,3,4]
         MODEL_CONFIGS = ['dinov2_base', 'dinov3_sat']
         all_configs = [(vp, f, mc) for mc in MODEL_CONFIGS for f in FOLDS for vp in VAR_PCTS]

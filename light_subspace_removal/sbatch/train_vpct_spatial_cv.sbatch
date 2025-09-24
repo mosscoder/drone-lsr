@@ -18,7 +18,7 @@ mamba activate light-stable
 export PYTHONUNBUFFERED=1
 
 # Grid parameters (spatial-only CV with variance targets)
-TOTAL_CONFIGS=60      # 6 var levels × 5 folds × 2 model_configs
+TOTAL_CONFIGS=110     # 11 var levels × 5 folds × 2 model_configs
 TOTAL_JOBS=8          # matches --array 0-7
 OUT_SIZE=224          # supervision size (must be integer multiple of token grid)
 
