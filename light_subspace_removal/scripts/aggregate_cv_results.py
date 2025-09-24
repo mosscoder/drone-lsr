@@ -183,7 +183,7 @@ def create_comparison_plot(dinov2_results, dinov3_results, output_path):
         ax.set_ylim(y_min - pad, y_max + pad)
 
     # Legend in lower left with Model title
-    legend = ax.legend(title='Model', loc='top left', framealpha=0.9)
+    legend = ax.legend(title='Model', loc='upper left', framealpha=0.9)
     legend.get_title().set_fontweight('bold')
 
     # Main title
