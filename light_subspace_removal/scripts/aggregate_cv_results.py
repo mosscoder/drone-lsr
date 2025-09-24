@@ -161,8 +161,8 @@ def create_comparison_plot(dinov2_results, dinov3_results, output_path):
                 label='DINOv3-sat')
         ax.fill_between(vps[mask3], v3_low[mask3], v3_up[mask3], color='C1', alpha=0.25)
 
-    ax.set_xlabel('Lighting subspace variance removed (%)')
-    ax.set_ylabel('RMSE (cm)')
+    ax.set_xlabel('Percent of lighting subspace variance removed')
+    ax.set_ylabel('Plant canopy height RMSE (cm)')
     ax.grid(True, alpha=0.3)
     ax.set_xlim(-2, 102)
 
@@ -183,12 +183,10 @@ def create_comparison_plot(dinov2_results, dinov3_results, output_path):
         ax.set_ylim(y_min - pad, y_max + pad)
 
     # Legend in lower left with Model title
-    legend = ax.legend(title='Model', loc='lower right', framealpha=0.9)
+    legend = ax.legend(title='Model', loc='top left', framealpha=0.9)
     legend.get_title().set_fontweight('bold')
 
     # Main title
-    plt.title('Canopy Height Prediction: Effect of Lighting Subspace Removal',
-              fontsize=14, pad=20)
     plt.tight_layout()
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
