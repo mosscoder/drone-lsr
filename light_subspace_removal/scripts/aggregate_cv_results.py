@@ -253,18 +253,47 @@ def save_csv_table(df, output_path):
     print(f"Saved CSV table: {output_path}")
 
 def save_latex_table(df, output_path):
-    """Save results DataFrame as LaTeX table."""
+    """Save results DataFrame as LaTeX table with CIs in parentheses."""
     if df.empty:
         print("Warning: Empty DataFrame, skipping LaTeX output")
         return
 
+    # Create formatted strings with CIs in parentheses
+    df['RMSE_formatted'] = df.apply(
+        lambda row: f"{row['Mean_RMSE_cm']:.2f}({row['CI_Lower_cm']:.2f},{row['CI_Upper_cm']:.2f})",
+        axis=1
+    )
+
+    # Pivot to get models as columns
+    pivot_df = df.pivot(
+        index='Variance_Removed_Pct',
+        columns='Model',
+        values='RMSE_formatted'
+    )
+
+    # Reset index to make variance percent a column
+    pivot_df = pivot_df.reset_index()
+
+    # Rename columns
+    pivot_df = pivot_df.rename(columns={'Variance_Removed_Pct': 'Percent Variance Removed'})
+
+    # Ensure column order
+    column_order = ['Percent Variance Removed']
+    if 'DINOv2-base' in pivot_df.columns:
+        column_order.append('RMSE DINOv2-base')
+        pivot_df = pivot_df.rename(columns={'DINOv2-base': 'RMSE DINOv2-base'})
+    if 'DINOv3-sat' in pivot_df.columns:
+        column_order.append('RMSE DINOv3-sat')
+        pivot_df = pivot_df.rename(columns={'DINOv3-sat': 'RMSE DINOv3-sat'})
+
+    pivot_df = pivot_df[column_order]
+
     # Format the DataFrame for LaTeX
-    latex_str = df.to_latex(
+    latex_str = pivot_df.to_latex(
         index=False,
-        float_format='%.2f',
-        caption='Cross-validation results showing mean RMSE at best epoch with 95\\% confidence intervals',
+        caption='Cross-validation results showing mean RMSE (cm) at best epoch with 95\\% confidence intervals in parentheses',
         label='tab:cv_results',
-        column_format='l' + 'r' * (len(df.columns) - 1),
+        column_format='r' * len(pivot_df.columns),
         escape=False
     )
 
