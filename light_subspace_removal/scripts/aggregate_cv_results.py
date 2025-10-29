@@ -15,6 +15,7 @@ Each JSON should include:
 
 import argparse, json, os, glob
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 from scipy import stats
 from pathlib import Path
@@ -76,14 +77,14 @@ def load_results_for_model(base_dir, model_config):
 # --------------------------
 # CV metrics
 # --------------------------
-def compute_cv_metrics(fold_results):
+def compute_cv_metrics_with_epoch(fold_results):
     """
     Given a list of result dicts (one per fold), compute:
     mean RMSE at the epoch minimizing the mean RMSE across folds,
-    plus 95% t-CI across folds at that epoch.
+    plus 95% t-CI across folds at that epoch, and the best epoch number.
     """
     if not fold_results:
-        return None, None, None
+        return None, None, None, None
 
     histories = []
     for r in fold_results:
@@ -92,7 +93,7 @@ def compute_cv_metrics(fold_results):
             histories.append(h)
 
     if not histories:
-        return None, None, None
+        return None, None, None, None
 
     min_len = min(len(h) for h in histories)
     H = np.array([h[:min_len] for h in histories])  # [n_folds, n_epochs]
@@ -112,6 +113,15 @@ def compute_cv_metrics(fold_results):
     else:
         ci_lower = ci_upper = mean_rmse
 
+    return mean_rmse, ci_lower, ci_upper, best_epoch
+
+def compute_cv_metrics(fold_results):
+    """
+    Given a list of result dicts (one per fold), compute:
+    mean RMSE at the epoch minimizing the mean RMSE across folds,
+    plus 95% t-CI across folds at that epoch.
+    """
+    mean_rmse, ci_lower, ci_upper, _ = compute_cv_metrics_with_epoch(fold_results)
     return mean_rmse, ci_lower, ci_upper
 
 # --------------------------
@@ -195,6 +205,75 @@ def create_comparison_plot(dinov2_results, dinov3_results, output_path):
     print(f"Saved comparison plot: {output_path}")
 
 # --------------------------
+# Tabular outputs
+# --------------------------
+def create_results_dataframe(dinov2_results, dinov3_results):
+    """
+    Create a DataFrame with CV results for both models across all variance percentages.
+    """
+    v2_keys = set(dinov2_results.keys()) if dinov2_results else set()
+    v3_keys = set(dinov3_results.keys()) if dinov3_results else set()
+    all_vps = sorted(v2_keys | v3_keys)
+
+    if not all_vps:
+        return pd.DataFrame()
+
+    rows = []
+    for model_name, model_results in [("DINOv2-base", dinov2_results),
+                                       ("DINOv3-sat", dinov3_results)]:
+        if not model_results:
+            continue
+
+        for vp in all_vps:
+            fold_results = model_results.get(vp, [])
+            mean_rmse, ci_lower, ci_upper, best_epoch = compute_cv_metrics_with_epoch(fold_results)
+
+            if mean_rmse is not None:
+                rows.append({
+                    'Model': model_name,
+                    'Variance_Removed_Pct': int(vp),
+                    'Mean_RMSE_cm': mean_rmse,
+                    'CI_Lower_cm': ci_lower,
+                    'CI_Upper_cm': ci_upper,
+                    'Best_Epoch': best_epoch,
+                    'N_Folds': len(fold_results)
+                })
+
+    df = pd.DataFrame(rows)
+    return df
+
+def save_csv_table(df, output_path):
+    """Save results DataFrame as CSV."""
+    if df.empty:
+        print("Warning: Empty DataFrame, skipping CSV output")
+        return
+
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    df.to_csv(output_path, index=False, float_format='%.2f')
+    print(f"Saved CSV table: {output_path}")
+
+def save_latex_table(df, output_path):
+    """Save results DataFrame as LaTeX table."""
+    if df.empty:
+        print("Warning: Empty DataFrame, skipping LaTeX output")
+        return
+
+    # Format the DataFrame for LaTeX
+    latex_str = df.to_latex(
+        index=False,
+        float_format='%.2f',
+        caption='Cross-validation results showing mean RMSE at best epoch with 95\\% confidence intervals',
+        label='tab:cv_results',
+        column_format='l' + 'r' * (len(df.columns) - 1),
+        escape=False
+    )
+
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    with open(output_path, 'w') as f:
+        f.write(latex_str)
+    print(f"Saved LaTeX table: {output_path}")
+
+# --------------------------
 # Main
 # --------------------------
 def main():
@@ -218,6 +297,15 @@ def main():
     # Plot
     out_path = os.path.join(args.output_dir, "cv_comparison_variance_pct.png")
     create_comparison_plot(dinov2_results, dinov3_results, out_path)
+
+    # Generate tabular outputs
+    df = create_results_dataframe(dinov2_results, dinov3_results)
+    if not df.empty:
+        csv_path = os.path.join(args.output_dir, "cv_results_table.csv")
+        save_csv_table(df, csv_path)
+
+        latex_path = os.path.join(args.output_dir, "cv_results_table.tex")
+        save_latex_table(df, latex_path)
 
     # Console summary
     print("\nSummary by % variance removed:")
